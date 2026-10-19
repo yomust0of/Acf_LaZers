@@ -1,10 +1,9 @@
 -- =========================================================================
--- CHANGES vs the init.lua you have now (version 9.7). Search this file for [CHANGED n].
---   1  The version line says 10
---   2  DamageProp: the pass-through line is ACFLazers.GetPassLine(caliber, focal): PenArmourFraction x caliber x the SAME damage multiplier the hit just got (focal curve x falloff),
---      so what a beam can burn through shrinks with distance and grows with a sharp focus, exactly as its damage does. At multiplier 1 it is the old 1/3 of the caliber.
---      ACF's own penetration number (`pen`, caliber x PenetrationPerMM, only used inside ACF's damage maths) is NOT scaled.
---   3  Comment only: GetDrawRate's note describes the plain draw numbers (config: LazerDrawSmall to LazerDrawBig, a straight line, no scale knobs)
+-- CHANGES vs the init.lua you have now (version 10). Search this file for [CHANGED n].
+--   1  The version line says 13.5
+--   2  Everything BEHIND a plate the beam burned through now takes the damage multiplier that PLATE took (focal curve x distance falloff at the plate's own distance, remembered
+--      in beam.penMult), times the usual slice of PenDamageFraction, instead of the multiplier at its own (farther) hit distance. People behind the plate follow the same rule.
+--      The angle effect of each prop it lands on, and the small-lazer boost, still apply as before. What decides whether the beam gets through is unchanged.
 -- =========================================================================
 
 AddCSLuaFile("cl_init.lua")
@@ -27,7 +26,7 @@ if not LASER_CONFIG then
 end
 
 -- Which version of this file is running. It is printed to the server console when the file loads, and every notice below carries it.
-local VERSION = "10" -- [CHANGED 1]
+local VERSION = "13.5" -- [CHANGED 1]
 MsgN("[acf_lazer] init.lua version " .. VERSION .. " loaded")
 
 -- Diagnosis switch, now a COMMAND. Admins (in their own console) and the server console type  acf_lazer_debug 1  and fire at a prop:
@@ -401,7 +400,7 @@ function ENT:GetPoolCapacity()
     return total
 end
 
--- kJ per second this lazer eats while it fires (config GetDrawRate: a straight line from LazerDrawSmall to LazerDrawBig by size, plain numbers). -- [CHANGED 3]
+-- kJ per second this lazer eats while it fires (config GetDrawRate: from LazerDrawSmall at the smallest lazer to LazerDrawBig at the biggest, shaped by LazerDrawCurve).
 function ENT:GetDrawRate()
     return ACFLazers.GetDrawRate(self:GetCaliber())
 end
@@ -541,7 +540,7 @@ function ENT:CalculateFocalDamage(hitDistance)
 end
 
 -- The multiplier on ALL damage for a hit this far from the muzzle: the focal curve (above) times the distance falloff
--- (config: ACFLazers.GetFalloff, 1.0 at the muzzle down to 3/5 at the effective range and on to 0). Props AND people both get this.
+-- (config: ACFLazers.GetFalloff, 1.0 at the muzzle down to FalloffAtRange at the effective range and on to 0). Props AND people both get this.
 function ENT:CalculateDamageMult(hitDistance)
     return self:CalculateFocalDamage(hitDistance) * ACFLazers.GetFalloff(hitDistance, self:GetCaliber())
 end
@@ -972,17 +971,17 @@ function ENT:DamageProp(target, tr, dir, dt, focal, doEffects, beam)
     --   destroyed prop                  -> yes, nothing left to block it, and it does not use up the burn-through
     --   already burned through a plate  -> no: this prop survived, so it stops the beam (it still took the weakened damage above)
     --   otherwise                       -> only if this plate's armour NOW (ACF lowers it as health drops, damage_sv.lua:245) is below
-    --                                      PenArmourFraction x caliber x the damage multiplier of this hit ("the line", ACFLazers.GetPassLine: [CHANGED 2]
+    --                                      PenArmourFraction x caliber x the damage multiplier of this hit ("the line", ACFLazers.GetPassLine:
     --                                      it follows the damage, so it is smaller far away or off the focus). The plate itself took normal damage this tick; everything
-    --                                      behind it takes a slice of normal damage: nothing when the armour is right on the line, the full
-    --                                      PenDamageFraction once the armour is at PenRampEnd x the line or lower, a straight slide in between.
+    --                                      behind it takes a slice of the damage this plate took (at THIS plate's multiplier, beam.penMult): nothing when the armour is right on the line,
+    --                                      the full PenDamageFraction once the armour is at PenRampEnd x the line or lower, a straight slide in between. [CHANGED 2]
     -- [LATER] Burst lazers may want different numbers: make PenArmourFraction / PenDamageFraction depend on the lazer type here.
     local passes = false
 
     if killed then
         passes = true
     elseif not beam.penetrated and target.ACF and target.ACF.Armour then
-        local threshold  = ACFLazers.GetPassLine(caliber, focal) -- "the line", in mm of armour. [CHANGED 2] focal = this hit's damage multiplier (focal curve x falloff): the line follows the damage
+        local threshold  = ACFLazers.GetPassLine(caliber, focal) -- "the line", in mm of armour. focal = this hit's damage multiplier (focal curve x falloff): the line follows the damage
         local armourNow  = target.ACF.Armour
 
         if armourNow < threshold then
@@ -994,6 +993,7 @@ function ENT:DamageProp(target, tr, dir, dt, focal, doEffects, beam)
             passes           = true
             beam.penetrated  = true
             beam.scale       = LASER_CONFIG.PenDamageFraction * howFar
+            beam.penMult     = focal -- [CHANGED 2] remember the multiplier THIS plate took: everything behind it uses it (ProcessLaserImpact, where focal is worked out)
         end
     end
 
@@ -1022,6 +1022,12 @@ function ENT:ProcessLaserImpact(tr, dir, dt, doEffects, beam)
     end
 
     local focal = self:CalculateDamageMult((tr.HitPos - self:GetMuzzlePos()):Length()) -- "focal" now means focal curve x distance falloff
+
+    -- [CHANGED 2] Behind a plate the beam burned through (beam.penetrated), everything takes the multiplier that plate took (beam.penMult, set in DamageProp)
+    -- and the slice beam.scale of it, not the multiplier at its own, farther, distance. People get the same.
+    if beam.penetrated and beam.penMult then
+        focal = beam.penMult
+    end
 
     if isPerson then
         self:DamagePerson(target, dt, focal, beam)
@@ -1072,7 +1078,8 @@ function ENT:FireLaserBeam(dt)
     -- The beam's own state, shared by everything it hits this tick:
     --   scale      = its strength: 1 = full. After it burns through a plate this becomes a slice of PenDamageFraction (see DamageProp).
     --   penetrated = true once it has burned through a plate; the next plate that survives it will stop it.
-    local beam = { scale = 1, penetrated = false }
+    --   penMult    = the damage multiplier (focal curve x falloff) the burned-through plate took; everything behind it uses this one [CHANGED 2]
+    local beam = { scale = 1, penetrated = false, penMult = nil }
 
     for _ = 1, LASER_CONFIG.MaxBeamHits do
         if remaining <= 0 then
