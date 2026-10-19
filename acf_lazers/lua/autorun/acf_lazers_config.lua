@@ -1,0 +1,974 @@
+-- =========================================================================
+-- ACF LAZERS: SHARED CONFIG
+-- Lives at:  lua/autorun/acf_lazers_config.lua
+--
+-- CHANGES vs the config you uploaded from your server (Oct 19, second upload: handoff 13.1's code plus your own hand edits). Search this file for [CHANGED n].
+--   1  LAZER DRAW CURVE. New knob LazerDrawCurve: 0 = the draw is a straight line between LazerDrawSmall and LazerDrawBig (what it was), 1 = fully exponential (every extra
+--      millimetre multiplies the draw by the same factor), anything between = a mix of the two. Default 0.75 (your server value, see 8; it was 0.5 in 13 to 13.3). The two ends (your 100 and 40000 kJ/s)
+--      do not move: only the middle sizes get cheaper (100 mm 11500 -> 3290 kJ/s, 160 mm 20050 -> 6512). The start energy (LazerStartSeconds x draw) follows
+--   2  GENERATOR HUB: the overload that BROKE engine links is gone (GenOverloadTolerance / Seconds / Repeat / BreakOrder and PickOverloadVictim are deleted). The hub now simply
+--      takes at most its rated hp from its engines; engines may push more, the rest is ignored. Nothing to set: the rating IS the limit
+--   3  GENERATOR HUB: damage. New knob GenDamagedEfficiency (0.5) and ACFLazers.GetGenEfficiency(health): a hub makes 1x the energy per hp at full health, down to this at 0 health
+--   4  GENERATOR TOOL display. New helper ACFLazers.GetGenReadout(hp) (the numbers the tool shows: kJ per second at full health and at no health, fill time of a reference capacitor)
+--      and the knob GenToolCapSize (60, the capacitor size that fill time is quoted for; it was a hard-coded 60 in the tool)
+--   5  YOUR SERVER NUMBERS, kept as the defaults (they were different in my copy): EffectiveRangeSmall 15000 / EffectiveRangeBig 30000 / FalloffAtRange 3/4, LazerDrawSmall 100 /
+--      LazerDrawBig 25000 (since changed again, see 7), SmallBoostMult 2 / SmallBoostEndMM 300, CapEnergyScale 1, CapMassPerVolume 0.009 (since changed again, see 8). Only the comments next to them were redone (their examples are
+--      recalculated). Nothing in the code reads these differently
+--   6  GenKJPerHP 2.6 -> 5.2: energy generation is twice as effective (heat is meant to limit how often you can fire, more than the capacitors do)
+--   7  YOUR TWO LATER SERVER CHANGES (13.2): CapEnergyPerVolume 0.2 -> 0.3 (capacitors hold 1.5x as much) and LazerDrawBig 25000 -> 40000 (the biggest lazer eats 40000 kJ/s). Every example number in the
+--      comments below was recalculated with the config's own functions (a 60 unit capacitor now holds 203,575 kJ; a 3500 hp hub fills it in 11.2 s)
+--   8  YOUR FIVE HAND EDITS FROM THE SERVER (13.4), now the defaults: MassMin 40 -> 60, MassMax 2300 -> 9000, LazerDrawCurve 0.5 -> 0.75, LazerStartSeconds 3 -> 1,
+--      CapMassPerVolume 0.009 -> 0.03. Every example number in the comments next to them was recalculated with the config's own functions (a 100 mm lazer now draws 3290 kJ/s and
+--      needs 3290 kJ in the pool to start; 100 mm weighs 790 kg; a 60 unit capacitor weighs 20,358 kg)
+--   9  PENETRATION (13.5). PenetrationPerMM 1.0 -> 0.3 (your request: ACF's penetration number should be about a third of the caliber, like the pass-through line). It feeds ACF's damage
+--      maths only (damage = area x min(1, penetration / plate thickness)^2), never the pass-through decision. And the damage BEHIND a burned-through plate now uses the multiplier the first plate
+--      took (focal curve x falloff there) times the usual slice of PenDamageFraction, not the multiplier at its own, farther, distance (code: acf_lazer/init.lua, in this batch)
+--   10 CapDiameterMax 100 -> 60 (your request): the biggest capacitor is now a 60 unit one (203,575 kJ, 20,358 kg), which also keeps every capacitor under the engine's 50,000 kg mass limit
+--   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
+--
+-- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
+-- =========================================================================
+
+if SERVER then AddCSLuaFile() end
+
+ACFLazers = ACFLazers or {}
+
+-- Goes up by one every time a link is made or broken or a capacitor is removed. Lazers and capacitors remember the number they last built
+-- their capacitor group at; when it differs, they rebuild the group. (Kept across Lua refreshes on purpose.)
+ACFLazers.LinkVersion = ACFLazers.LinkVersion or 0
+
+-- Keep the SAME table object across Lua refreshes, so files that grabbed a reference earlier
+-- (init.lua does: local LASER_CONFIG = ACFLazers.Config) still see the new numbers.
+ACFLazers.Config = ACFLazers.Config or {}
+table.Empty(ACFLazers.Config)
+
+table.Merge(ACFLazers.Config, {
+
+    -- ===================== SIZE ("caliber", in millimetres) =====================
+    -- The name you picked is "Lenze(TM) Diameter". That is only the TEXT on the tool slider (SizeLabel below).
+    -- Identifiers, wire outputs and dupe keys still say "Caliber" on purpose: renaming those would break old dupes and any wiring / E2
+    -- that reads the "Caliber" output. Say the word if you want those renamed too.
+    -- (The TM sign is written as the byte codes \226\132\162 so this file stays plain ASCII and no editor can garble it.)
+    SizeLabel       = "Lenze\226\132\162 Diameter",
+    CaliberMin      = 20,     -- smallest lazer the tool can make
+    CaliberMax      = 300,    -- biggest lazer the tool can make
+    CaliberBase     = 100,    -- the model is its normal size (scale 1.0) at this caliber. scale = caliber / CaliberBase
+
+    -- ===================== MASS (kg) =====================
+    -- mass = MassMin + (MassMax - MassMin) * t ^ MassExponent,   t = 0 at CaliberMin ... 1 at CaliberMax
+    -- MassExponent bends the curve (bigger = light lazers stay light for longer):
+    --   2 -> 100 mm is about 790 kg     3 -> about 269 kg    4 -> about 120 kg    (all hit 9000 kg at CaliberMax)
+    MassMin         = 60,     -- [CHANGED 8] kg at CaliberMin. Your server value (was 40)
+    MassMax         = 9000,   -- [CHANGED 8] kg at CaliberMax. Your server value (was 2300)
+    MassExponent    = 2,      -- was 3. (With the old 40 / 2300 kg ends, 2 gave 224 kg at 100 mm; with your 60 / 9000 it gives 790 kg)
+
+    -- ===================== ACF HEALTH / ARMOUR =====================
+    -- Gun-style, copied from acf_gun/init.lua:1344-1364 [SEEN]:
+    --   armour (mm) = caliber * ACF.ArmorMod        health = surface area / ACF.Threshold
+    -- These two multipliers let you scale them without touching code. 1 = exactly like an ACF gun.
+    -- (This is your "lazer volume multiplier": ACF guns have no ductility value, so these two knobs are the whole story.)
+    ArmourMult      = 0.5,  -- was 1. Half the armour: a 100 mm lazer has 50 mm, a 300 mm one 150 mm (a gun would have 100 and 300)
+    HealthMult      = 1,
+
+    -- ===================== FOCAL LENGTH + FOCUS AMOUNT (tool sliders + the damage curve) =====================
+    -- Damage depends on how far from the lazer the beam hits, measured along the beam (units).
+    --   * "Focal length" (slider 1) = the distance where the lazer does its MAX damage (1.0). Its longest allowed value is the lazer's "max focal distance":
+    --         max focal distance = FocalMaxFraction (3/7) x the lazer's effective range      (effective range: EffectiveRangeSmall ... EffectiveRangeBig, further down)
+    --   * "Focus amount" (slider 2, FocusAmountMin..FocusAmountMax = 0 to 100) = how tightly the damage is gathered round the focal length. It sets the RADIUS of the focused zone,
+    --     along the beam only, and the radius comes from the lazer's size (it is not a plain number of units any more):
+    --         focus amount   0 -> radius = the max focal distance                                   (loosest)
+    --         focus amount 100 -> radius = the max focal distance x FocusRadiusMinFraction (1/3)     (sharpest)
+    --         in between       -> a straight line between those two
+    --     At the edge of the radius (focal length +/- radius) the damage has tapered in a straight line down to FocalEdgeFraction (3/4) of max.
+    --   * FARTHER than the far edge: a straight line from FocalEdgeFraction down to FocalFarEndFraction (1/3) at the lazer's effective range.
+    --   * CLOSER than the near edge (only when the focal length is bigger than the radius): flat at FocalEdgeFraction (3/4) all the way to the muzzle. It used to taper down to 1/3
+    --     at the muzzle, which made the damage climb very steeply whenever the near edge sat just in front of it. If the near edge would be behind the muzzle (radius bigger than the
+    --     focal length) there is no closer part: the curve is simply cut off at the muzzle.
+    --   * SHARP FOCUS BONUS: a focus amount above FocusBoostStart adds a bonus to the CENTRE only (the edge stays at 3/4 of the normal max). It grows in a straight line
+    --     from nothing (at FocusBoostStart) to FocalBoostMax (1.4x) at the sharpest focus amount.
+    --   With the numbers below the far edge can never be farther than 3/7 + 3/7 = 6/7 of the effective range, so the curve has no jump anywhere (a radius that reaches past the
+    --   effective range would make the damage jump). Changing FocalMaxFraction above 1/2 breaks that; the damage notes in the project state say how to check.
+    --   The tool's Focal Length slider follows the lazer size you pick (its top end is ACFLazers.GetFocalLimits for that size) and the server squeezes the number into the same limit again.
+    FocalMin        = 200,    -- shortest focal length for any lazer
+    FocalDefault    = 300,
+    FocalMaxFraction = 3 / 7, -- longest focal length ("max focal distance") as a share of the lazer's effective range. Replaces FocalMaxSmall / FocalMaxBig
+    FocusAmountMin     = 0,   -- the Focus amount slider's two ends. 0 = loosest. These only define what "0" and "100" mean; the maths works out the rest
+    FocusAmountMax     = 100, -- 100 = sharpest
+    FocusAmountDefault = 50,  -- [GUESS] where the slider starts (50 = no sharp-focus bonus yet, see FocusBoostStart)
+    FocusRadiusMinFraction = 1 / 3, -- the radius at the sharpest focus amount, as a share of the max focal distance (the loosest radius is the whole max focal distance)
+    FocusBoostStart    = 50,  -- the sharp-focus bonus starts at this focus amount (same scale as the slider). Replaces FocalBoostRangeMult: 50 is where "twice the smallest range" fell
+    FocalEdgeFraction     = 3 / 4, -- damage at the edge of the radius, as a fraction of the normal max
+    FocalFarEndFraction   = 1 / 3, -- damage at the lazer's effective range, as a fraction of the normal max
+    FocalBoostMax         = 1.4,   -- centre damage at the sharpest focus amount (1.4 = 1.4x the normal max)
+
+    -- ===================== BEAM =====================
+    -- DISTANCE FALLOFF. Every beam loses damage the farther it travels, in ONE straight line:
+    --     1.0 right at the muzzle  ...  FalloffAtRange (3/4) at the lazer's "effective range"  ...  and it keeps dropping on the same line down to 0.
+    --   "Effective range" is just a name for the distance where the damage has dropped to FalloffAtRange. It depends on the lazer's size, in a straight line:
+    --     EffectiveRangeSmall (15000) at the smallest lazer ... EffectiveRangeBig (30000) at the biggest.
+    --   Where the line reaches 0 damage the beam stops entirely (it is not even drawn past there). With 3/4 that is at 4 x the effective range
+    --   (60000 for the smallest, 120000 for the biggest, but BeamRangeCap below ends every beam first: the biggest one at 50000, where it still does 58% damage). The falloff is MULTIPLIED with the focal curve (focal length / range, above).
+    EffectiveRangeSmall = 15000,  -- [CHANGED 5] units. Smallest lazer: damage is FalloffAtRange (3/4) at this distance. Your server value (was 6000)
+    EffectiveRangeBig   = 30000,  -- [CHANGED 5] units. Biggest lazer. Your server value (was 20000, 10000 before that). The longest focal length is 3/7 of this (300 mm: 12857)
+    FalloffAtRange      = 3 / 4,  -- [CHANGED 5] your server value (was 3/5). Damage multiplier at the effective range (1 = no falloff at all: the beam then goes as far as BeamRangeCap)
+    BeamRangeCap        = 50000,  -- units. Safety cap on how far any beam may reach, whatever the falloff numbers say. was 30000. With FalloffAtRange 3/4 the biggest lazer's beam would end at 4 x EffectiveRangeBig = 120000,
+    --                                  so a cap below that cuts the beam where its damage is still above 0 (and FalloffAtRange 1 = no falloff = the beam goes all the way to this number)
+    MaxBeamHits     = 32,     -- safety cap: most things one beam can pass through in one tick
+    MaxDeltaTime    = 0.1,    -- seconds. Caps the "time since last tick" used for damage, so a lag spike can't dump a huge hit
+    -- When a lazer cannot hurt a prop (safezone, ACF refused the hit, a crashing damage hook ...) its owner gets a chat message saying why.
+    ShowProblemNotices = true,  -- false = never send those messages
+    NoticeInterval     = 10,    -- seconds. At most one message per reason per lazer in this time
+    NoCapacitorNoticeInterval = 30, -- seconds. A lazer with NO capacitor linked, with Fire held, reminds its owner this often (the only power-related chat line; the hover text says the rest)
+    -- true  = a prop that the lazer's safezone check flags is IMMUNE to lazers (the beam stops on it: no damage, no fire). Your earlier rule.
+    --               false = lazers treat such a prop like any other: only ACF's own rules (permission mode, ACF safezones, other addons' hooks) can protect it.
+    -- Does not touch people: their protection is each player's own toolgun checkbox (IsPersonProtected).
+    ProtectSafezoneProps = true,
+
+    -- ===================== DAMAGE TO PROPS / VEHICLES (goes through ACF's own pipeline) =====================
+    -- Each tick the beam is treated as a "hit" with:
+    --    Area (cm^2)       = beam cross-section * HitsPerSecond * seconds-since-last-tick   <- tick-rate independent
+    --    Penetration (mm)  = caliber * PenetrationPerMM                                    <- caliber only, as you asked
+    -- ACF then does the rest (armour, angle, health, dirt, debris). See the notes in PROJECT_STATE.md.
+    HitsPerSecond     = 0.5,  -- [GUESS] tuning knob: higher = everything dies faster
+    -- PenetrationPerMM ONLY feeds ACF's damage maths. It does not decide whether the beam gets through a plate: that is the pass-through rule just below.
+    -- ACF's rule ([SEEN] acf/damage/objects_sv/damage_result.lua, Compute): damage to the plate = Area x min(1, penetration / thickness)^2, where thickness = the plate's CURRENT armour / cos(angle)
+    -- (the angle here is the real angle x AngleInfluence, below). So a plate no thicker than the penetration takes the full area damage, a thicker one takes (penetration / thickness)^2 of it.
+    -- With 0.3 a 100 mm lazer counts as 30 mm of penetration: a 30 mm plate takes the full damage, a 60 mm plate 1/4 of it, a 100 mm plate 9%. (With the old 1.0 it counted as 100 mm,
+    -- so every plate up to 100 mm took the full damage: that is why things were being obliterated.) The pass-through line (PenArmourFraction below) is a separate knob.
+    PenetrationPerMM  = 0.3,  -- [CHANGED 9] your request (was 1.0): ACF counts the lazer as about a third of its caliber, in mm of penetration
+
+    -- PASS-THROUGH RULE (for normal lazers; burst lazers may get their own numbers later):
+    --   * The beam STOPS on the first armoured prop it hits. It only gets through if that prop's CURRENT armour (mm) is below "the line":
+    --     PenArmourFraction x the lazer's caliber (mm) x THE DAMAGE MULTIPLIER AT THAT HIT.  The multiplier is the very same number the damage gets at that distance
+    --     (the focal curve x the distance falloff, init.lua ENT:CalculateDamageMult), so the line rises and falls with the damage: at multiplier 1 it is exactly PenArmourFraction x caliber
+    --     (1/3 of the caliber), at 0.5 half of that, and where the beam has faded to 0 nothing can be pierced any more (ACFLazers.GetPassLine does the sum).
+    --     ACF lowers a plate's armour as the plate loses health (never below half of its original).
+    --   * The plate being burned through takes the NORMAL damage (at its own multiplier).
+    --   * Everything BEHIND it takes the SAME damage multiplier that plate took (focal curve x falloff at THAT plate's distance, remembered when the beam went through [CHANGED 9]),
+    --     times a slice of it, so the damage behind = the damage at the first plate's multiplier x the slice, whatever distance the things behind are at (the usual angle effect of each
+    --     prop it lands on still applies to it). The slice slides:
+    --       armour exactly on the line                        -> nothing
+    --       armour at PenRampEnd x the line (or lower)        -> the full PenDamageFraction
+    --       in between                                        -> a straight line between those two
+    --     Nothing behind it catches fire. People behind the plate follow the same rule.
+    --   * A beam can burn through ONE prop only. The next prop that survives it stops it (it still takes the weakened damage).
+    --   * A prop that is DESTROYED never blocks the beam and does not use up the one burn-through.
+    --   * People, NPCs and things ACF ignores (holograms, E2...) never block the beam and don't use up the burn-through either.
+    -- Examples (100 mm lazer HIT AT DAMAGE MULTIPLIER 1, fraction 1/3 -> the line is 33 mm of armour, PenRampEnd 1/2 -> full damage at 16.7 mm; at multiplier 0.6 the line is 20 mm and so on):
+    --   * a 10 mm plate is under the line from the very first tick: the beam goes through it, and what is behind takes the full 1/4 (of the damage at the multiplier the 10 mm plate took).
+    --   * a 25 mm plate also goes through at once, but what is behind takes about half of the 1/4.
+    --   * a 40 mm plate holds the beam until damage has worn its armour under 33 mm, then the beam goes through.
+    --   * a 100 mm plate never wears below 50 mm, so it is never pierced (only destroyed). Same for anything over 66 mm. That is on purpose.
+    PenArmourFraction = 1 / 3,  -- [GUESS] starting value: the line, as a fraction of the caliber, AT DAMAGE MULTIPLIER 1: the real line at a hit is this x the damage multiplier there
+    PenDamageFraction = 1 / 4,  -- [GUESS] starting value: most that the stuff behind a pierced plate takes, as a fraction of normal
+    PenRampEnd        = 1 / 2,  -- [GUESS] starting value: the weakened damage reaches its full PenDamageFraction when armour is this fraction of the line
+
+    -- NEW. How much the angle the beam hits at matters. Think of a torch on a wall:
+    --   straight on = all the heat lands in a small spot;  tilted = the same heat smears over a longer streak.
+    --   0   = angle is ignored completely
+    --   1   = the full "smear" (damage rate follows cos of the angle: 60 degrees = half, 80 degrees = a sixth)
+    --   0.5 = a gentle version (60 degrees acts like 30, 80 degrees acts like 40). [GUESS] starting value, tune by feel.
+    -- It does two things at once, so you see it on thin AND thick plates:
+    --   (a) the angle ACF is told about is (real angle * AngleInfluence)  -> thick plates get a bit tougher
+    --   (b) the damage area is multiplied by cos(that same scaled angle)  -> thin plates take a bit less too
+    AngleInfluence    = 0.5,
+
+    -- ===================== DAMAGE TO PLAYERS / NPCs (kept as your old direct damage, now per second) =====================
+    -- Old code did 4 * (caliber/100) per tick; its real speed depended on the server tick rate.
+    -- 4 per mm per second = 400 per second for a 100 mm lazer (the old number at a nominal 100 Hz).
+    PersonDPSPerMM    = 4,
+
+    -- DISINTEGRATION. A person (player or NPC) killed by a lazer of at least this caliber (mm) has their body disintegrated.
+    -- By CALIBER now (you said "by caliber instead"). Not when they were behind a pierced plate or protected by a safezone (see init.lua DamagePerson).
+    DisintegrateCaliber = 100, -- [GUESS] starting value, tune by feel
+    DisintegrateType  = 0,    -- how the body dissolves: 0 = energy ball, 1 = heavy electrical, 2 = light electrical, 3 = core effect [KNOW: Entity:Dissolve types]
+
+    -- SAFEZONES. Anyone inside a safezone (as your safezone addon reports it, see IsEntityInSafezone in init.lua) takes only this fraction of
+    -- the lazer damage and can't be set on fire. Props in a safezone are still fully protected (the beam stops on them).
+    -- Whether this is applied at all is now a per-LAZER setting: the "Safezone protection" checkbox on the toolgun (saved on the lazer, dupes
+    -- keep it, checked by default). The old server console variable acf_lazer_safezone_protect is gone.
+    SafezoneDamageMult = 1 / 6,
+
+    -- FIRE. Wooden props burn for BurnTimeMin seconds at the smallest lazer, scaling in a straight line to BurnTimeMax at the biggest.
+    -- People (and NPCs) are only set on fire by lazers at or above PersonIgniteCaliber; their burn time uses the same scale but STARTS at that caliber
+    -- (so a lazer right at PersonIgniteCaliber burns for BurnTimeMin, the biggest for BurnTimeMax) and is then multiplied by PersonBurnMult.
+    BurnTimeMin         = 3,    -- seconds
+    BurnTimeMax         = 15,   -- seconds
+    PersonIgniteCaliber = 60,   -- mm. Lazers smaller than this never ignite people. you asked for 60 (was 100)
+    PersonBurnMult      = 1.5,  -- people burn this many times longer than props would. [GUESS] starting value
+
+    -- ===================== LAZER POWER: ENERGY COMES FROM CAPACITORS =====================
+    -- (The old burst length / forced recharge knobs were removed here .)
+    -- A lazer only fires while the capacitors linked to it (and every capacitor grouped with those) hold energy. Energy is counted in kJ, the same unit ACF uses
+    -- for HE (ACF.HEPower = 8000 kJ per kg of HE filler), so a capacitor's stored energy can be turned straight into an explosion.
+    -- While firing, a lazer eats  draw rate x seconds  of energy every tick (its "bite"). The draw rate slides in a straight line with the lazer's size.
+    RequireCapacitor  = true,   -- false = lazers fire for free again (no capacitor needed). Handy for testing the damage side on its own
+    -- PLAIN NUMBERS: the draw is worked out over the lazer's size, from LazerDrawSmall at the smallest lazer to LazerDrawBig at the biggest. What you type here is
+    --   what those two lazers eat: there are no scale knobs. The sizes in between follow the curve below. [CHANGED 1]
+    --   LazerDrawCurve  0   = a straight line:   100 + 39900 x t                    (50 mm 4375, 100 mm 11500, 160 mm 20050, 200 mm 25750 kJ/s)
+    --                   1   = fully exponential: 100 x (40000 / 100) ^ t             (50 mm 190,  100 mm 554,  160 mm 2000,  200 mm 4707 kJ/s)
+    --                   0.5 = half of each (the default until 13.3):                 (50 mm 2283, 100 mm 6027, 160 mm 11025, 200 mm 15229 kJ/s)
+    --                   0.75 = three quarters exponential (the default now):         (50 mm 1236, 100 mm 3290, 160 mm 6512, 200 mm 9968 kJ/s)
+    --   where t = (caliber - CaliberMin) / (CaliberMax - CaliberMin) runs from 0 (smallest) to 1 (biggest). The start energy (LazerStartSeconds x draw) follows.
+    LazerDrawSmall    = 100,    -- [CHANGED 5] kJ per second the smallest lazer (CaliberMin) eats while firing. Your server value (was 200)
+    LazerDrawBig      = 40000,  -- [CHANGED 7] kJ per second the biggest lazer (CaliberMax) eats while firing. Your server value (was 25000 in 13.1, 45000 before that)
+    LazerDrawCurve    = 0.75,   -- [CHANGED 1] [CHANGED 8] your server value (was 0.5). 0 = straight line, 1 = fully exponential, in between = a mix (see above). Clamped to 0 .. 1. Lower = the middle sizes eat more
+    -- A lazer that ran dry (a "dud") only starts again once the pool holds at least this many SECONDS of its own draw. Without it, a lazer fed by a trickle
+    -- would flicker on and off every tick. 0 = restart as soon as the pool can pay for one tick.
+    LazerStartSeconds = 1,      -- [CHANGED 8] your server value (was 3 in 13 to 13.3, 0.5 before that). A pool that holds less than this many seconds of the lazer's draw can still start it if it is nearly full (next line)
+    -- OVERRIDE for the rule above (9.2): when the whole pool (every capacitor reachable from the lazer) is at least this full, the lazer may start / restart even if the pool holds less than
+    -- LazerStartSeconds of its draw. Without it a lazer whose capacitors can never hold the start energy would never fire. 0.9 = 90% full. 0 or less = no override (the LazerStartSeconds rule alone decides).
+    -- Above 1 (say 2) also means no override, because a pool can never be more than 100% full.
+    LazerStartFullFraction = 0.9,
+    LazerEnergyReadInterval = 0.25, -- seconds between refreshes of the lazer's "Energy" wire output while it is in use (it checks once a second when idle)
+
+    -- ===================== SMALL-LAZER BOOST (damage to PROPS only; people are not affected) =====================
+    -- Small lazers hit props SmallBoostMult times harder (2 = double). The boost is full at SmallBoostFullMM and below, then slides in a straight line
+    -- down to SmallBoostEndMult at SmallBoostEndMM, and every bigger lazer gets SmallBoostEndMult (1 = no boost). With your numbers (20 mm 2x, tapering to 1x at 300 mm) a 160 mm lazer hits props 1.5x.
+    SmallBoostMult    = 2,      -- [CHANGED 5] boost for the smallest lazers. Your server value (was 1.19)
+    SmallBoostFullMM  = 20,     -- caliber (mm) up to which the boost is at full strength
+    SmallBoostEndMM   = 300,    -- [CHANGED 5] caliber (mm) where the boost has tapered off to SmallBoostEndMult. Your server value (was 70)
+    SmallBoostEndMult = 1.0,    -- the multiplier at SmallBoostEndMM and above
+
+    -- ===================== CAPACITORS =====================
+    -- SIZE. The model is a cylinder CapModelDiameter units across and CapModelHeight units tall at scale 1. A capacitor of diameter d is scaled by d / CapModelDiameter.
+    CapModel          = "models/lasers/capacitor.mdl", -- your own capacitor model (changed from the Wiremod one). If the file is missing the capacitor refuses to spawn and says so
+    CapModelDiameter  = 10,
+    CapModelHeight    = 40,
+    CapDiameterMin    = 6,      -- smallest capacitor the tool can make (units across)
+    CapDiameterMax    = 60,     -- [CHANGED 10] biggest capacitor the tool can make. Your request (was 100). Bigger ones on a dupe or an update are squeezed down to this
+    CapDiameterDefault = 20,    -- starting value of the tool slider
+    -- ENERGY. Capacity (kJ) = CapEnergyPerVolume x the model's volume in cubic units. Volume = pi x (d/2)^2 x height, and height = d x CapModelHeight / CapModelDiameter,
+    -- so volume = pi x d^3 for this model. With 0.3 x CapEnergyScale (1): a 10-unit capacitor holds 942 kJ, a 20-unit one 7540 kJ, a 60-unit one (the biggest, CapDiameterMax) 203,575 kJ (= 25.4 kg of ACF HE).
+    CapEnergyPerVolume = 0.3,   -- [CHANGED 7] kJ per cubic unit: the base power density of the capacitors. Your server value (was 0.2)
+    CapEnergyScale     = 1,     -- [CHANGED 5] your server value (was 2/3). ONE scalar on top of that: every capacitor holds this share of CapEnergyPerVolume. 2/3 = "two thirds as power dense overall". 1 = off
+    CapNoChargeWhileDrained = true, -- true = a capacitor does NOT charge by itself (its own charger is off) while a lazer is drawing from its pool. It still takes DUMPS from other capacitors. false = it charges all the time, as in 8
+    CapDrainHoldSeconds = 0.25, -- seconds the charging stays off after a lazer last drew from the pool. Keep it above CapThinkInterval (0.1) or the charging would flicker between the lazer's draws
+    CapChargeRateDefault = 100, -- [GUESS] starting value of the tool's charge-rate slider (kJ per second). A capacitor whose own limit is lower than that (CapChargeRateMaxFraction of its capacity: only the very smallest sizes) is held to its own top
+    CapChargeRateMaxFraction = 1 / 3, -- the fastest a capacitor may charge itself, as a share of its capacity per second: the slider and the server's clamp end at capacity x this (it was 1, a full fill in one second)
+    CapThinkInterval  = 0.1,    -- seconds between capacitor updates (charging, dumping, wire outputs)
+    CapMaxDeltaTime   = 0.5,    -- seconds. Longest "time since last update" a capacitor will charge for (a lag spike cannot dump a huge charge in one go)
+    CapRateReadInterval = 0.25, -- seconds between refreshes of the "apparent charge rate" and the wire outputs
+    -- BODY. Mass, armour and health of a capacitor (health uses the same rule as ACF guns: surface area / ACF.Threshold).
+    CapMassPerVolume  = 0.03,   -- [CHANGED 8] your server value (was 0.009, 0.004 before that). [GUESS] kg per cubic unit: 10 units = 94 kg, 20 = 754 kg, 60 units (the biggest) = 20,358 kg.
+    --                                  [KNOW, not tested] the engine caps a physics object at 50,000 kg; with CapDiameterMax 60 no capacitor gets near it (it would from about 81 units up)
+    CapArmourPerUnit  = 0.5,    -- [GUESS] mm of armour per unit of diameter (10 units = 5 mm, 60 units = 30 mm)
+    CapHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
+    -- EXPLOSION ODDS WHEN DAMAGED (but not destroyed). c = charge as a fraction of capacity, h = health as a fraction of max health (after the hit).
+    --   c under CapExplodeMinCharge (10%)            -> never explodes
+    --   c under h                                    -> CapExplodeChanceBase (40%)
+    --   c from h up to h + CapExplodeRamp (30 points) -> climbs in a straight line from 40% to CapExplodeChanceMax (80%)
+    --   c at h + 30 points or more                   -> 80%
+    -- The dice are rolled at most once per CapExplodeRollInterval seconds per capacitor, so a lazer beam (which damages every tick) does not roll 60 times a second.
+    CapExplodeMinCharge  = 0.10,
+    CapExplodeChanceBase = 0.40,
+    CapExplodeChanceMax  = 0.80,
+    CapExplodeRamp       = 0.30,
+    CapExplodeRollInterval = 0.25, -- [GUESS] seconds
+    -- WHAT AN EXPLODING CAPACITOR RELEASES (destroyed or exploded): a random share of its stored energy between these two fractions. The energy becomes an ACF
+    -- explosion: filler kg = kJ / ACF.HEPower x CapExplosionMult. CapReleaseMinKJ is a floor so an empty capacitor still pops a tiny bit (never exactly 0).
+    CapReleaseMinFraction = 0.5,
+    CapReleaseMaxFraction = 1.0,
+    CapReleaseMinKJ    = 0.1,
+    CapExplosionMult   = 1,     -- 1 = exactly the HE equivalent. Raise it for bigger bangs, lower it for smaller ones
+    CapMaxPerPlayer    = 20,    -- default for the server variable sbox_maxacf_capacitors (how many capacitors one player may have)
+
+    -- ===================== GENERATOR HUB ===================== [CHANGED 2]
+    -- WHAT IT IS. A flywheel LOAD for ACF engines. Engines are linked to it (the way they are linked to a gearbox); every server tick it slows each linked engine's flywheel a little
+    -- (that is the "drag") and turns the power it took into kJ in the capacitors it is linked to. Details: ACF's engine keeps a flywheel; a gearbox asks for torque, the flywheel
+    -- loses RPM equal to the torque given / its inertia [SEEN acf_engine/init.lua:812-859]. The generator does the same to the engine's FlyRPM, ONCE PER ENGINE, so it can
+    -- tell how much each engine is giving (for the readouts), and so it can share its rating between them.
+    GenModel           = "models/lasers/generator.mdl", -- your buddy's model: sized for 350 hp at scale 1 (the middle knot below). If the file is missing the generator refuses to spawn and says so
+    -- SIZE <-> POWER. The tool slider is the generator's RATED power in hp. The model scale follows it through these knots {hp, model scale}. Between two knots the scale follows a
+    -- power law (a straight line on a graph with both axes logarithmic), so every knot is hit exactly: 50 hp = 0.5, 350 hp = 1.0, 3500 hp = 2.0 (100 hp = 0.64, 200 hp = 0.82, 1000 hp = 1.37, 2000 hp = 1.69).
+    GenHPMin           = 50,    -- smallest rated power the tool can make (hp). Must be the first knot's hp
+    GenHPMax           = 3500,  -- biggest rated power (hp). Must be the last knot's hp
+    GenHPDefault       = 350,   -- starting value of the tool slider
+    GenScaleKnots      = { { 50, 0.5 }, { 350, 1 }, { 3500, 2 } }, -- {hp, scale}, smallest hp first, at least two
+    -- THE ENGINE INPUT POINT (copies a gearbox: the engine's driveshaft ends here). Model space. The engine has to be in FRONT of this point: the straight line from this point to the
+    -- engine's driveshaft end must be within GenInputAngle degrees of "straight ahead from this point" (the model's forward, +X). Further off than that and the link is refused / broken.
+    -- ACF also checks the engine's own end the way it does for gearboxes (its limit is ACF.MaxDriveshaftAngle, 85 by default [SEEN acf/core/globals.lua:178]), so the engine's rear must face the generator.
+    GenInputPos        = { 20, 0, 1 },
+    GenInputAngle      = 45,    -- degrees. ACF's own gearbox limit is 85
+    GenMaxEngines      = 8,     -- most engines one generator can have linked (the wire output and the rope drawing keep one slot per engine)
+    GenCheckInterval   = 1,     -- seconds between the checks that every link is still short enough and still straight enough (ACF's engine does it every 3 s; the cone is tighter here)
+    GenStretchFactor   = 1.5,   -- a link breaks when the two ends are this many times farther apart than they were when it was made (ACF's gearboxes use 1.5 too)
+    -- THE LOAD. For each linked engine, every tick:
+    --     torque taken (Nm) = Draw x GenLoadStrength x T_ref x (rpm / peak-power rpm) ^ GenLoadExponent          (never more than the flywheel has above idle, like ACF's gearboxes)
+    --   where T_ref = the engine's peak power (kW) x 9548.8 / its peak-power rpm = the torque it makes AT its peak power. "Draw" is the wire input as a fraction (100 = 1, 0 = 0).
+    --   So at Draw 100 and full throttle the load line crosses the engine's own torque curve near its peak-power rpm: a real ACF engine settles at 99-114% of its rated kW there
+    --   (tried on all 99 engine definitions of this ACF with its real flywheel maths: median 102%, only the tiny 0.5-I1 is above 110%). A load that grows with rpm is also what keeps it stable: the engine finds its own speed.
+    --   Below 100 the engine is only partly loaded: it revs higher, at a power below peak. At zero throttle (or on its rev limiter) an ACF engine feeds nothing to gearboxes, so neither does this.
+    GenLoadStrength    = 1,     -- 1 = Draw 100 takes the engine's whole peak power at its peak-power rpm. Above 1 = heavier (the engine bogs lower), below 1 = lighter (it revs higher)
+    GenLoadExponent    = 1,     -- how fast the load grows with rpm: 0 = constant torque, 1 = like an alternator (default), 2 = like a fan. 2 keeps more power at partial Draw
+    GenDrawDefault     = 100,   -- what the Draw input counts as while nothing is wired to it (100 = take everything, like AllowCharge counting as on)
+    GenDrawMax         = 100,   -- the Draw input value that means "all" (the wire value is clamped to 0 .. this)
+    GenKwRpmConstant   = 9548.8, -- power (kW) = torque (Nm) x rpm / 9548.8. ACF's own number [SEEN acf_engine/init.lua:538]: a constant of nature, not a tuning knob
+    GenKwToHp          = 1.341, -- used only if ACF.KwToHp is missing [SEEN acf/core/globals.lua:198]
+    GenEngineHPMult    = 1,     -- ACF's engine menu shows the PLAIN kW / hp by default. Its hidden torque multiplier (ACF.TorqueMult, 5) only multiplies the torque handed to WHEELS. If your menu is set to
+    --                             show hp multiplied by it, set this to 5 so the hp here is the number you read on the engine
+    -- ENERGY. THE energy-per-hp scalar: kJ stored per hp-second taken from the engines (times the damage multiplier below). 60-unit capacitor = 203,575 kJ, 3500 hp x 5.2 = 18,200 kJ/s -> full in 11.19 s.
+    GenKJPerHP         = 5.2,   -- [CHANGED 6] was 2.6: twice as effective, so that heat (not the capacitors) is what limits how often you can fire
+    -- THE RATING IS A LIMIT, NOT A BREAKING POINT. [CHANGED 2] Engines may push more than the rating: the hub just takes at most its rated hp in total (the tool slider value) and the
+    -- engines feel no more drag than that. Nothing here to set. (The old overload knobs, which broke engine links, are gone.)
+    -- DAMAGE. [CHANGED 3] A damaged hub makes less energy for the same hp taken: x1 at full health, falling in a straight line to GenDamagedEfficiency at 0 health.
+    GenDamagedEfficiency = 0.5,  -- energy multiplier at 0% health (1 at 100%). 0.5 = a hub at 40% health makes 0.7x the energy
+    GenPowerSmoothing    = 0.4,  -- seconds. Time constant of the smoothing of the hp reading (wire output, hover text)
+    GenToolCapSize       = 60,   -- [CHANGED 4] the generator tool quotes "fills a capacitor this big in N seconds" for this capacitor size (a display number only: changes nothing in the game)
+    -- RUNNING. The generator thinks every server tick (like the engine) because it has to slow the flywheel once per engine tick.
+    GenMaxDeltaTime    = 0.1,   -- seconds. Longest "time since last tick" it will act for (a lag spike cannot take a huge bite out of an engine)
+    GenOutputInterval  = 0.25,  -- seconds between refreshes of the wire outputs and the hover text
+    -- BODY. Mass, armour and health. Mass = GenMassAtOne x scale ^ GenMassExponent (a volume-like curve: 50 hp = 50 kg, 350 hp = 400 kg, 3500 hp = 3200 kg).
+    GenMassAtOne       = 400,   -- [GUESS] kg at model scale 1 (ACF's 9.0L V8 petrol weighs 400 kg [SEEN acf/entities/engines/v8.lua:36])
+    GenMassExponent    = 3,
+    GenArmourAtOne     = 40,    -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod)
+    GenHealthMult      = 1,     -- multiplier on the health ACF works out from the surface area
+    GenMaxPerPlayer    = 10,    -- default for the server variable sbox_maxacf_generators
+
+    -- ===================== LINKING TOOLS ===================== [CHANGED 3]
+    -- The things the link tools (right-click / shift / reload on the lazer, capacitor and generator tools) can select and link. ACF's own link system decides which PAIRS work:
+    --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor.
+    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine" }, -- class -> the word used in chat messages
+
+    -- ===================== WOBBLE: A DAMAGED LAZER LOSES ITS AIM =====================
+    -- The lower a lazer's health, the more its beam drifts away from where it points. The drift is SMOOTH (it slowly wanders around, it never
+    -- jumps) and stays inside a cone around the true aim. The cone is given in MOA ("minutes of angle"): 60 MOA = 1 degree. [KNOW] 1 degree is about 17 units
+    -- of sideways error per 1000 units of distance, so 180 MOA is about 52 units off at 1000 units.
+    --   * Health at or above WobbleStartHealth: perfect aim. Below it, the cone grows in a straight line, reaching its full size at 0 health.
+    --   * The full size of the cone depends on the lazer's size (bigger lazers suffer more): WobbleMaxMOASmall at the smallest, WobbleMaxMOABig at the biggest.
+    --   * "Health" is ACF's own health fraction of the lazer (current / max), so repairing the lazer gives its aim back.
+    --   The cone is the LIMIT: the beam wanders inside it and usually sits well within it (it only reaches the edge now and then).
+    WobbleStartHealth = 2 / 3,  -- health fraction where the wobble begins (1 = any damage, 0.5 = at half health)
+    WobbleMaxMOASmall = 120,    -- [GUESS] full cone at 0 health for the smallest lazer (120 MOA = 2 degrees)
+    WobbleMaxMOABig   = 300,    -- full cone at 0 health for the biggest lazer: 300 MOA = 5 degrees (you didn't like 360). A 100 mm lazer lands near 170 MOA (about 2.9 degrees)
+    WobbleMaxDegrees  = 5,      -- HARD CAP: no lazer is ever more than this many degrees off its true aim, whatever the two numbers above say
+    -- HOW FAST IT DRIFTS. The speed itself wanders, smoothly and randomly, between two limits: now and then it is "slowly maneuvering",
+    -- now and then it is "darting around". These are multiples of the normal drift (WobblePeriod): 1 = normal, 3 = three times as busy, 0.2 = a fifth.
+    WobblePeriod      = 6,      -- [GUESS] seconds: roughly how long one slow swing takes at normal speed (x1). Bigger = lazier, smaller = busier
+    WobbleSpeedSlow   = 0.2,    -- [GUESS] the slowest the drift ever gets (x0.2 = one swing per 30 s)
+    WobbleSpeedFast   = 3,      -- [GUESS] the fastest ("darting"): x3 = one swing per 2 s, and its small wiggles are quicker still
+    WobbleSpeedChangePeriod = 10, -- [GUESS] seconds: roughly how long the speed takes to go from calm to darting and back
+
+    -- ===================== HIT EFFECTS (sparks / dust at the end of the beam) =====================
+    -- 0.2 -> 0.05 seconds between effect bursts per lazer = 20 per second (was 5).
+    -- NOTE: this only paces the VISUALS. Damage already ran every server tick and still does, so
+    -- "same damage over time" is automatic. Lower it for a denser spray; it can't go faster than the server tick anyway.
+    HitEffectInterval = 0.05,
+    -- ACF's debris code (ACF.APKill, used when a prop dies) wants a pretend shell. Only used for the debris strength now:
+    FakeShellMassPerCm3 = 0.008,  -- kg per (caliber in cm)^3.   100 mm -> 8 kg
+    FakeShellSpeed      = 25000,  -- inches per second (ACF stores speeds in in/s). 25000 in/s is about 635 m/s
+    MaxDebrisPower      = 65535,  -- ACF writes debris power as a 16-bit number [SEEN debris_sv.lua:16]. Don't raise this.
+
+    -- ===================== MODEL / MUZZLE HUM =====================
+    DefaultModel    = "models/lasers/laser.mdl",
+    SoundFile       = "weapons/physcannon/superphys_hold_loop.wav",  -- the hum AT THE LAZER while firing
+    -- The hum now follows the lazer's size, in a straight line between the two ends:
+    --   smallest lazer (CaliberMin) gets the "Small" value, biggest (CaliberMax) gets the "Big" value, and everything between is a straight-line mix.
+    -- Pitch is 0-255 (100 = normal; lower number = deeper); the engine cannot go above 255, init.lua clamps it. [KNOW] (GMod wiki: CSoundPatch:ChangePitch)
+    -- LOUDNESS: the engine's volume only goes 0 to 1 [KNOW] (GMod wiki: CSoundPatch:ChangeVolume), and the hum was already at 1.0. So the numbers
+    -- below are a "loudness" that may go above 1: init.lua gives the engine min(loudness, 1) as the volume, and turns every doubling above 1 into
+    -- MuzzleDbPerDoubling extra decibels of SOUND LEVEL, which makes it carry farther (more distance before it fades). [GUESS] that SetSoundLevel works on a
+    -- CreateSound; point-blank the hum can't get louder than 1.0, far away the big lazers are clearly louder.
+    -- Asked: big twice as loud as small (1.0 x 2 = 2.0), then +0.4 on both = 1.4 and 2.4. (If you meant big = exactly 2 x the NEW small, make it 2.8.)
+    MuzzleVolumeSmall = 1.4,    -- loudness of the smallest lazer (was 1.0)
+    MuzzleVolumeBig   = 2.4,    -- loudness of the biggest lazer (was 1.0)
+    MuzzleSoundLevel    = 75,   -- [GUESS] decibels the hum starts from (75 = the engine's normal level)
+    MuzzleDbPerDoubling = 6,    -- [KNOW-ish] +6 dB is about twice the sound pressure; extra dB per doubling of loudness above 1.0. 0 = never use sound level
+    -- +60 on both (your new sound pack). 315 is past the engine's 255 ceiling, so the smallest lazers just sit at 255 until the slide comes
+    -- down under it (at about 144 mm, 44% of the way up the size range); everything bigger really is 60 higher than before.
+    MuzzlePitchSmall  = 315,    -- was 255
+    MuzzlePitchBig    = 180,    -- was 120
+
+    -- ===================== END-OF-BEAM SOUNDS =====================
+    -- Two looping sounds that sit AT THE END OF THE BEAM (the spot it is burning) and follow it around.
+    -- They are started once when the beam starts hitting something and stopped when it stops. Nothing plays "on damage".
+    -- [GUESS] every file name below: audition them in the game console with   play <path>   and swap what you don't like.
+    --   other candidates to try: ambient/energy/force_field_loop1.wav   ambient/machines/combine_shield_loop3.wav
+    BurnSound       = "ambient/energy/electric_loop.wav",   -- the "cutting torch" layer. Plays on any surface
+    BurnVolume      = 0.6,    -- 0.0 to 1.0
+    BurnPitchSmall  = 140,    -- pitch at CaliberMin (0-255, 100 = normal)
+    BurnPitchBig    = 60,     -- pitch at CaliberMax. Lower number = deeper, so bigger lazers sound heavier
+    BurnSoundLevel  = 80,     -- decibels: how far away you can hear it (75 is a normal prop, 90 is a loud machine)
+
+    RumbleSound     = "physics/concrete/concrete_scrape_rough_loop1.wav", -- the "ablative" layer. ONLY plays on rock / dirt / sand...
+    RumbleVolume    = 0.5,
+    RumblePitchSmall = 90,    -- was 120: you said the rumble sounded high. [GUESS] how deep, tune by feel
+    RumblePitchBig   = 40,    -- was 70. Very low numbers sound like slow motion; raise it if so
+
+    EmitterModel    = "models/props_junk/PopCan01a.mdl",   -- invisible little entity that carries the two sounds to the beam end
+
+    -- ===================== MULTIPLAYER =====================
+    -- true  = every player is always told about every lazer, so a beam stays visible even when the lazer
+    --         itself is behind a wall / out of their view. Costs a little network traffic per lazer.
+    -- false = normal GMod behaviour (only lazers near the player are sent).
+    AlwaysTransmit  = true,
+
+    -- ===================== BEAM COLOURS =====================
+    -- Each set is a list of colour stops {red, green, blue} (0-255), spread EVENLY from the smallest lazer to the biggest,
+    -- and blended smoothly between neighbours. Add / remove / recolour stops freely: any number of stops works.
+    -- Which set a lazer uses is its "ColorSet" flag (0 or 1), saved on the lazer and set from the tool's checkbox.
+    -- A lazer can ALSO have its own custom colour (the tool's "Use custom beam colour" box); that replaces both sets.
+    BeamPalettes = {
+        [0] = { {255, 30, 30}, {40, 255, 60}, {0, 230, 255}, {120, 90, 255} },  -- red > green > cyan > blue-purple (between cyan and purple)
+        [1] = { {255, 140, 0}, {255, 230, 0}, {30, 90, 255}, {170, 40, 255} },  -- orange > yellow > blue > purple (planned for burst lazers)
+    },
+    -- BeamAlphaMin (the lowest opacity a player could pick) used to be here. It is gone, and so is the opacity setting: the beam is always fully opaque
+    -- (how dark the colour is decides how faint the beam looks, and a faint beam is still visible on FLIR).
+    -- Where the custom colour picker starts, and what an old dupe with no custom colour gets: red, green, blue, each 0-255. (it had a fourth number, the opacity)
+    CustomColorDefault = { 255, 255, 255 },
+})
+
+-- =========================================================================
+-- HELPERS (shared, so the tool or HUD could use them later)
+-- =========================================================================
+
+--- Clamp a number that came from a player (tool, dupe, console) into low..high. Anything that is not a real number (nil, text, NaN, infinity) becomes `default` first.
+--- math.Clamp on its own lets NaN straight through, and one NaN in a damage formula spreads to everything it touches. The server's VerifyData functions use this for every number.
+function ACFLazers.ClampNumber(value, default, low, high)
+    value = tonumber(value)
+
+    if not value or value ~= value or value == math.huge or value == -math.huge then value = default end
+
+    return math.Clamp(value, low, high)
+end
+
+--- How big the model is for a caliber. 1.0 at CaliberBase.
+function ACFLazers.GetScale(caliber)
+    return caliber / ACFLazers.Config.CaliberBase
+end
+
+-- NEW: 0 at the smallest lazer ... 1 at the biggest. Mass, beam colour and sound pitch all use it,
+-- so "how big is this lazer, on a 0-to-1 scale" is answered in exactly ONE place.
+function ACFLazers.GetSizeFraction(caliber)
+    local C    = ACFLazers.Config
+    local span = math.max(C.CaliberMax - C.CaliberMin, 0.0001)
+
+    return math.Clamp((caliber - C.CaliberMin) / span, 0, 1)
+end
+
+--- Mass in kg for a caliber, from the anchors + exponent above.
+function ACFLazers.GetMass(caliber)
+    local C = ACFLazers.Config
+    local t = ACFLazers.GetSizeFraction(caliber) -- was computed inline here
+
+    return math.Round(C.MassMin + (C.MassMax - C.MassMin) * t ^ C.MassExponent)
+end
+
+--- The longest focal length ("max focal distance") a lazer of this caliber may use: FocalMaxFraction (3/7) of its effective range.
+--- Everything about focus is measured against this one number (see GetFocalRange).
+function ACFLazers.GetFocalMax(caliber)
+    return ACFLazers.Config.FocalMaxFraction * ACFLazers.GetEffectiveRange(caliber)
+end
+
+--- The Focus amount slider as a fraction: 0 = the loosest end ... 1 = the sharpest end. A missing or junk value counts as FocusAmountDefault.
+function ACFLazers.GetFocusFraction(amount)
+    local C    = ACFLazers.Config
+    local span = math.max(C.FocusAmountMax - C.FocusAmountMin, 0.0001)
+    local a    = tonumber(amount)
+
+    if not a or a ~= a then a = C.FocusAmountDefault end
+
+    return math.Clamp((a - C.FocusAmountMin) / span, 0, 1)
+end
+
+--- The radius of the focused zone (units along the beam) for a lazer of this caliber at this Focus amount: the max focal distance at the loosest setting,
+--- FocusRadiusMinFraction (1/3) of it at the sharpest, a straight line in between. So the radius grows with the lazer size.
+function ACFLazers.GetFocalRange(caliber, amount)
+    return ACFLazers.GetFocalMax(caliber) * Lerp(ACFLazers.GetFocusFraction(amount), 1, ACFLazers.Config.FocusRadiusMinFraction)
+end
+
+--- The shortest and longest focal length for a lazer of this caliber, in ONE place. The tool's Focal Length slider (client) and VerifyData in the lazer's init.lua
+--- (server) both read it. Returns  focalMin, focalMax.  (The Focus amount has the same ends for every size: FocusAmountMin / FocusAmountMax.)
+function ACFLazers.GetFocalLimits(caliber)
+    local C = ACFLazers.Config
+
+    return C.FocalMin, math.max(ACFLazers.GetFocalMax(caliber), C.FocalMin)
+end
+
+--- Sharp-focus bonus for a Focus amount: 1 (none) up to FocusBoostStart, then rising in a straight line to FocalBoostMax at the sharpest focus amount.
+--- Only the centre of the curve gets it (see GetFocalFactor).
+function ACFLazers.GetFocalBoost(amount)
+    local C     = ACFLazers.Config
+    local start = ACFLazers.GetFocusFraction(C.FocusBoostStart)
+    local t     = math.Clamp((ACFLazers.GetFocusFraction(amount) - start) / math.max(1 - start, 0.0001), 0, 1)
+
+    return Lerp(t, 1, C.FocalBoostMax)
+end
+
+--- The damage multiplier for a hit `distance` units from the muzzle, for a lazer of this caliber with this focal length and Focus amount. 1 = the normal max.
+--- Centre = 1 (or the sharp-focus bonus), edge of the radius = FocalEdgeFraction, then a straight line down to FocalFarEndFraction on the far side and flat on the near side (see the comment in the config).
+function ACFLazers.GetFocalFactor(focal, amount, distance, caliber)
+    local C     = ACFLazers.Config
+    local range = math.max(ACFLazers.GetFocalRange(caliber, amount), 0.0001)
+    local near  = focal - range
+    local far   = focal + range
+
+    if distance >= near and distance <= far then
+        -- inside the radius: centre (bonus) at the focal length, down to the edge value at either edge
+        return Lerp(math.abs(distance - focal) / range, ACFLazers.GetFocalBoost(amount), C.FocalEdgeFraction)
+    elseif distance > far then
+        -- farther than the far edge: edge value down to the far-end value, straight line out to the lazer's effective range
+        local t = math.Clamp((distance - far) / math.max(ACFLazers.GetEffectiveRange(caliber) - far, 0.0001), 0, 1)
+
+        return Lerp(t, C.FocalEdgeFraction, C.FocalFarEndFraction)
+    else
+        -- closer than the near edge (so near > 0 here): flat at the edge value all the way to the muzzle
+        return C.FocalEdgeFraction
+    end
+end
+
+--- The lazer's "effective range" in units: EffectiveRangeSmall at CaliberMin ... EffectiveRangeBig at CaliberMax (a straight line between).
+--- It is the distance where the damage has fallen to FalloffAtRange.
+function ACFLazers.GetEffectiveRange(caliber)
+    local C = ACFLazers.Config
+
+    return Lerp(ACFLazers.GetSizeFraction(caliber), C.EffectiveRangeSmall, C.EffectiveRangeBig)
+end
+
+--- How far the beam really reaches: the distance where the falloff line hits 0 damage (a beam stops entirely there).
+--- With FalloffAtRange f the line loses (1 - f) of the damage per effective range, so it reaches 0 at 1 / (1 - f) x the effective range (f = 3/4: 4 x). Never more than BeamRangeCap.
+function ACFLazers.GetBeamRange(caliber)
+    local C    = ACFLazers.Config
+    local loss = math.max(1 - C.FalloffAtRange, 0.0001) -- the part of the damage lost by the effective range (0.25 with FalloffAtRange 3/4)
+
+    return math.min(ACFLazers.GetEffectiveRange(caliber) / loss, C.BeamRangeCap)
+end
+
+--- The distance falloff multiplier: 1.0 at the muzzle, FalloffAtRange at the effective range, a straight line the whole way, never below 0.
+function ACFLazers.GetFalloff(distance, caliber)
+    local C    = ACFLazers.Config
+    local loss = 1 - C.FalloffAtRange
+
+    return math.max(0, 1 - loss * distance / math.max(ACFLazers.GetEffectiveRange(caliber), 0.0001))
+end
+
+--- The pass-through "line" (mm of armour): a plate is only burned through when its CURRENT armour is below this. At damage multiplier 1 it is
+--- PenArmourFraction (1/3) x the caliber, and it follows the damage: damageMult is the same number the damage uses at the hit (the focal curve x the distance falloff,
+--- ENT:CalculateDamageMult in init.lua). So a hit that does half damage has half the line, and a hit with no damage has no line. Never below 0.
+function ACFLazers.GetPassLine(caliber, damageMult)
+    return ACFLazers.Config.PenArmourFraction * caliber * math.max(tonumber(damageMult) or 0, 0)
+end
+
+--- kJ per second a lazer of this caliber eats while firing. LazerDrawSmall at CaliberMin and LazerDrawBig at CaliberMax; in between it is a mix of a straight line and an
+--- exponential curve, set by LazerDrawCurve (0 = all straight line, 1 = all exponential). [CHANGED 1]
+function ACFLazers.GetDrawRate(caliber)
+    local C      = ACFLazers.Config
+    local t      = ACFLazers.GetSizeFraction(caliber)
+    local small  = C.LazerDrawSmall
+    local big    = C.LazerDrawBig
+    local linear = Lerp(t, small, big)
+    local expo   = math.max(small, 1e-6) * (math.max(big, 1e-6) / math.max(small, 1e-6)) ^ t -- the same factor for every step in size
+    local mix    = math.Clamp(tonumber(C.LazerDrawCurve) or 0, 0, 1)
+
+    return Lerp(mix, linear, expo)
+end
+
+--- kJ the capacitor pool must hold before a lazer of this caliber starts (or restarts after a dud).
+function ACFLazers.GetStartEnergy(caliber)
+    return ACFLazers.GetDrawRate(caliber) * ACFLazers.Config.LazerStartSeconds
+end
+
+--- Prop-damage multiplier for a lazer of this caliber: SmallBoostMult up to SmallBoostFullMM, a straight line down to
+--- SmallBoostEndMult at SmallBoostEndMM, and SmallBoostEndMult for everything bigger.
+function ACFLazers.GetSmallDamageBoost(caliber)
+    local C    = ACFLazers.Config
+    local span = math.max(C.SmallBoostEndMM - C.SmallBoostFullMM, 0.0001)
+    local t    = math.Clamp((caliber - C.SmallBoostFullMM) / span, 0, 1) -- 0 = full boost ... 1 = fully tapered off
+
+    return Lerp(t, C.SmallBoostMult, C.SmallBoostEndMult)
+end
+
+-- =========================================================================
+-- CAPACITOR HELPERS. Pure maths and lists: nothing here touches the game, so they are easy to test.
+-- =========================================================================
+
+--- Scale of the capacitor model for a diameter in units (1 = the model's own size).
+function ACFLazers.GetCapScale(diameter)
+    return diameter / ACFLazers.Config.CapModelDiameter
+end
+
+--- The capacitor's volume in cubic units: a cylinder of this diameter, as tall as the model is for its width.
+function ACFLazers.GetCapVolume(diameter)
+    local C      = ACFLazers.Config
+    local radius = diameter / 2
+    local height = diameter * C.CapModelHeight / C.CapModelDiameter
+
+    return math.pi * radius * radius * height
+end
+
+--- Energy a capacitor of this diameter holds when full, in kJ.
+function ACFLazers.GetCapCapacity(diameter)
+    return ACFLazers.Config.CapEnergyPerVolume * ACFLazers.Config.CapEnergyScale * ACFLazers.GetCapVolume(diameter)
+end
+
+--- The fastest charge rate (kJ per second) a capacitor of this diameter may be set to: CapChargeRateMaxFraction (1/3) of its capacity.
+--- The capacitor tool's slider (client) and VerifyData in the capacitor's init.lua (server) both read this, so they cannot disagree.
+function ACFLazers.GetCapMaxChargeRate(diameter)
+    return ACFLazers.GetCapCapacity(diameter) * ACFLazers.Config.CapChargeRateMaxFraction
+end
+
+--- Mass in kg of a capacitor of this diameter.
+function ACFLazers.GetCapMass(diameter)
+    return math.max(1, math.Round(ACFLazers.Config.CapMassPerVolume * ACFLazers.GetCapVolume(diameter)))
+end
+
+-- ===================== GENERATOR HUB HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 4]
+
+--- A rated power coming from the tool, a dupe or a console command, made safe: a whole number of hp between GenHPMin and GenHPMax (anything that is not a number becomes GenHPDefault).
+function ACFLazers.ClampGenHP(hp)
+    local C = ACFLazers.Config
+
+    return math.Round(ACFLazers.ClampNumber(hp, C.GenHPDefault, C.GenHPMin, C.GenHPMax))
+end
+
+--- Model scale for a rated power. Passes through every knot of GenScaleKnots exactly; between two knots it is a power law (a straight line on log-log paper).
+function ACFLazers.GetGenScale(hp)
+    local knots = ACFLazers.Config.GenScaleKnots
+    local count = #knots
+
+    hp = math.Clamp(tonumber(hp) or knots[1][1], knots[1][1], knots[count][1])
+
+    for i = 1, count - 1 do
+        local a, b = knots[i], knots[i + 1]
+
+        if hp <= b[1] then
+            local t = (math.log(hp) - math.log(a[1])) / (math.log(b[1]) - math.log(a[1]))
+
+            return math.exp(math.log(a[2]) + t * (math.log(b[2]) - math.log(a[2])))
+        end
+    end
+
+    return knots[count][2]
+end
+
+--- Mass in kg of a generator with this rated power.
+function ACFLazers.GetGenMass(hp)
+    local C = ACFLazers.Config
+
+    return math.max(1, math.Round(C.GenMassAtOne * ACFLazers.GetGenScale(hp) ^ C.GenMassExponent))
+end
+
+--- kW -> hp the way the generator counts it: ACF's own conversion (ACF.KwToHp) times GenEngineHPMult.
+function ACFLazers.GetGenHP(kW)
+    local C = ACFLazers.Config
+
+    return kW * ((ACF and ACF.KwToHp) or C.GenKwToHp) * C.GenEngineHPMult
+end
+
+--- Torque (Nm) the generator takes from ONE engine this tick. draw = the Draw input as a fraction (0..1), rpm = the engine's flywheel rpm right now,
+--- peakKW / peakRPM = the engine's PeakPower / PeakPowerRPM (ACF works them out for every engine from its torque curve). See the notes at GenLoadStrength.
+function ACFLazers.GetGenLoadTorque(draw, rpm, peakKW, peakRPM)
+    local C = ACFLazers.Config
+
+    if not (draw and rpm and peakKW and peakRPM) then return 0 end
+    if draw <= 0 or rpm <= 0 or peakKW <= 0 or peakRPM <= 0 then return 0 end
+
+    local reference = peakKW * C.GenKwRpmConstant / peakRPM -- the torque the engine makes at its peak power
+
+    return draw * C.GenLoadStrength * reference * (rpm / peakRPM) ^ C.GenLoadExponent
+end
+
+--- kJ stored when `kW` of engine power is taken for `seconds`.
+function ACFLazers.GetGenEnergy(kW, seconds)
+    return ACFLazers.GetGenHP(kW) * ACFLazers.Config.GenKJPerHP * seconds
+end
+
+--- Energy multiplier of a generator for its health. health = ACF health as a fraction of max health (0..1). 1 at full health, GenDamagedEfficiency at none. [CHANGED 3]
+function ACFLazers.GetGenEfficiency(health)
+    local C = ACFLazers.Config
+
+    health = tonumber(health) or 1
+
+    -- NaN is the one number that is not equal to itself; math.Clamp lets it through, so catch it here (counts as undamaged).
+    if health ~= health then health = 1 end
+
+    return Lerp(math.Clamp(health, 0, 1), C.GenDamagedEfficiency, 1)
+end
+
+--- Everything the generator tool shows for a rated power (the slider): the energy per second the hub makes while it takes its whole rating at full health and at no health,
+--- and how long that takes to fill the reference capacitor (GenToolCapSize). Plain numbers, so the tool's panel, the toolgun screen and the tests all read the same thing. [CHANGED 4]
+function ACFLazers.GetGenReadout(hp)
+    local C = ACFLazers.Config
+
+    hp = ACFLazers.ClampGenHP(hp)
+
+    local effHurt  = ACFLazers.GetGenEfficiency(0)
+    local rate     = hp * C.GenKJPerHP * ACFLazers.GetGenEfficiency(1)
+    local rateHurt = hp * C.GenKJPerHP * effHurt
+    local capacity = ACFLazers.GetCapCapacity(C.GenToolCapSize)
+
+    return {
+        hp                 = hp,
+        scale              = ACFLazers.GetGenScale(hp),
+        mass               = ACFLazers.GetGenMass(hp),
+        kjPerHP            = C.GenKJPerHP,
+        rate               = rate,                                   -- kJ/s at full health
+        rateDamaged        = rateHurt,                               -- kJ/s with no health left
+        efficiencyDamaged  = effHurt,
+        capSize            = C.GenToolCapSize,
+        capacity           = capacity,                               -- kJ the reference capacitor holds
+        fillSeconds        = capacity / math.max(rate, 1e-6),        -- at full health
+        fillSecondsDamaged = capacity / math.max(rateHurt, 1e-6),
+    }
+end
+
+--- Chance (0..1) that a capacitor explodes when it is damaged but not destroyed.
+--- charge = stored energy as a fraction of capacity (0..1); health = ACF health as a fraction of max health (0..1).
+function ACFLazers.GetCapExplodeChance(charge, health)
+    local C = ACFLazers.Config
+
+    if charge < C.CapExplodeMinCharge then return 0 end
+
+    local ramp = math.max(C.CapExplodeRamp, 0.0001)
+    local t    = math.Clamp((charge - health) / ramp, 0, 1) -- 0 while the charge is under the health, 1 once it is `ramp` above it
+
+    return Lerp(t, C.CapExplodeChanceBase, C.CapExplodeChanceMax)
+end
+
+--- kJ an exploding capacitor releases. roll = a random number 0..1 (0 = the lowest share, 1 = the highest). Never less than CapReleaseMinKJ, so never 0.
+function ACFLazers.GetCapRelease(charge, roll)
+    local C = ACFLazers.Config
+
+    return math.max(charge * Lerp(roll, C.CapReleaseMinFraction, C.CapReleaseMaxFraction), C.CapReleaseMinKJ)
+end
+
+--- Splits `amount` between several sources that each can give at most limits[i]. Everyone gives the same share; a source that cannot give a full share
+--- gives all it has, and what it was short is shared out among the others (again equally, again with the same rule).
+--- Returns  takes (a list, same order as limits)  and  total (how much was really taken: the smaller of `amount` and the sum of all limits).
+--- Used for a lazer drawing from several capacitors AND for a dumping capacitor filling several others (there the limits are "how much each can accept").
+function ACFLazers.WaterFill(limits, amount)
+    local count     = #limits
+    local takes     = {}
+    local order     = {}
+    local wanted    = math.max(amount, 0)
+    local remaining = wanted
+
+    for i = 1, count do
+        takes[i] = 0
+        order[i] = i
+    end
+
+    -- the smallest limits first: they are the ones that may not manage a full share
+    table.sort(order, function(a, b) return limits[a] < limits[b] end)
+
+    for k = 1, count do
+        local i     = order[k]
+        local share = remaining / (count - k + 1)
+        local take  = math.min(math.max(limits[i], 0), share)
+
+        takes[i]  = take
+        remaining = remaining - take
+    end
+
+    return takes, wanted - remaining
+end
+
+--- Every capacitor connected to the ones in `starts` (a set: key = capacitor), through capacitor-to-capacitor links, as a list. The starting ones are included.
+--- Capacitors that no longer exist are skipped. Each capacitor keeps its neighbours in its CapLinks set.
+function ACFLazers.GetCapGroup(starts)
+    local seen, list = {}, {}
+
+    for cap in pairs(starts) do
+        if IsValid(cap) and not seen[cap] then
+            seen[cap] = true
+            list[#list + 1] = cap
+        end
+    end
+
+    local head = 1
+
+    while head <= #list do
+        local cap = list[head]
+
+        head = head + 1
+
+        for other in pairs(cap.CapLinks or {}) do
+            if IsValid(other) and not seen[other] then
+                seen[other] = true
+                list[#list + 1] = other
+            end
+        end
+    end
+
+    return list
+end
+
+--- How far off its true aim this lazer's beam may drift right now, in DEGREES (the cone's size).
+--- healthFraction: 1 = full health ... 0 = dead. 0 degrees until health falls under WobbleStartHealth, then a straight line up to the full size for this caliber.
+function ACFLazers.GetWobbleCone(caliber, healthFraction)
+    local C        = ACFLazers.Config
+    local start    = math.max(C.WobbleStartHealth, 0.0001)
+    local severity = math.Clamp((start - healthFraction) / start, 0, 1) -- 0 = healthy ... 1 = dead
+    local maxMOA   = Lerp(ACFLazers.GetSizeFraction(caliber), C.WobbleMaxMOASmall, C.WobbleMaxMOABig)
+
+    -- 60 MOA = 1 degree; and never past the hard cap, whatever the knobs say
+    return math.min(severity * maxMOA / 60, C.WobbleMaxDegrees)
+end
+
+--- A smooth, never-jumping, never-quite-repeating wander. Returns two numbers u, v: where inside the cone the aim is right now,
+--- as a share of the cone (the point (u, v) is always inside a circle of radius 1: 0,0 = straight ahead, 1,0 = the cone's edge).
+--- It is a pure function of the time and the lazer's own seed (a number that is just different per lazer, so two lazers never wobble in step):
+--- each axis is three slow sine waves of different speeds added together. Nothing has to be stored or stepped from tick to tick.
+--- THE SPEED ITSELF WANDERS. Instead of reading the waves at the real time, we read them at a "stretched clock" that runs fast
+--- sometimes (darting) and slow other times (maneuvering). A clock's speed is the slope of its reading, so we pick a smooth speed first
+--- (between WobbleSpeedSlow and WobbleSpeedFast, itself a slow wave) and use the exact running total of that speed as the clock (the total of a sine
+--- is a cosine, so it is a plain formula and still needs no stored state). The clock never jumps and never runs backwards, so the aim never jumps either.
+function ACFLazers.GetWobblePoint(seed, time)
+    local C  = ACFLazers.Config
+    local sw = 2 * math.pi / math.max(C.WobbleSpeedChangePeriod, 0.5) -- how quickly the speed itself changes, as radians per second
+    local p1, p2 = seed * 7.1, seed * 1.9                              -- this lazer's own start of the two speed waves
+    local w2 = sw * 1.37                                               -- the second speed wave is a bit faster, so the pattern never repeats
+
+    -- m = the speed wave, between -1 (slowest) and +1 (fastest); bigM = its running total since time 0 (the integral of m)
+    local m    = 0.7 * math.sin(sw * time + p1) + 0.3 * math.sin(w2 * time + p2)
+    local bigM = -0.7 * math.cos(sw * time + p1) / sw - 0.3 * math.cos(w2 * time + p2) / w2
+
+    local mid  = (C.WobbleSpeedFast + C.WobbleSpeedSlow) / 2
+    local half = (C.WobbleSpeedFast - C.WobbleSpeedSlow) / 2
+
+    -- the stretched clock: its speed (slope) is mid + half * m, which always stays between WobbleSpeedSlow and WobbleSpeedFast
+    local t = (mid * time + half * bigM) * 2 * math.pi / math.max(C.WobblePeriod, 0.1)
+
+    -- Different speeds (1, 1.73, 2.91 ... ) so the three waves never line up again; any seed works as a starting phase.
+    local u = 0.5 * math.sin(t * 1.00 + seed)       + 0.3 * math.sin(t * 1.73 + seed * 2.3) + 0.2 * math.sin(t * 2.91 + seed * 3.7)
+    local v = 0.5 * math.sin(t * 1.27 + seed * 4.1) + 0.3 * math.sin(t * 2.11 + seed * 5.3) + 0.2 * math.sin(t * 3.37 + seed * 6.9)
+
+    -- each axis alone stays within -1..1, but together they can poke out of the circle (a square's corner): pull those back in
+    local len = math.sqrt(u * u + v * v)
+
+    if len > 1 then
+        u, v = u / len, v / len
+    end
+
+    return u, v
+end
+
+--- The stand-in "AP shell" for a caliber. Returns: diameter in cm, mass in kg, speed in in/s.
+--- (ACF's debris code works in cm, kg and in/s.)
+function ACFLazers.GetFakeShell(caliber)
+    local C  = ACFLazers.Config
+    local cm = caliber * 0.1
+
+    return cm, cm ^ 3 * C.FakeShellMassPerCm3, C.FakeShellSpeed
+end
+
+-- NEW: what kind of surface is this? The server uses it to decide whether to play the rumble, and the
+-- hit effect uses it to decide between sparks-only and dust. The MAT_* names are the same ones ACF's own
+-- effects use ([SEEN] acf/core/utilities/effects/effects_cl.lua:4-19, effects/acf_penetration.lua:11-17).
+local EarthMaterials = {
+    [MAT_CONCRETE] = true,
+    [MAT_TILE]     = true,
+    [MAT_DIRT]     = true,
+    [MAT_GRASS]    = true,
+    [MAT_SAND]     = true,
+    [MAT_SNOW]     = true,
+}
+
+--- "earth" = rock / asphalt / dirt / sand / grass / snow.  "hard" = everything else (metal, props, plastic ...).
+function ACFLazers.GetSurfaceClass(matType)
+    return EarthMaterials[matType] and "earth" or "hard"
+end
+
+-- The colour of a beam. size (caliber) picks the spot along the palette; colorSet (0/1, or false/true) picks the palette.
+--   override = OPTIONAL Color. If given, it replaces the palette entirely. cl_init.lua passes the lazer's custom colour when its UseCustomColor is on.
+-- The colour is always fully opaque (alpha 255): the opacity setting is gone.
+-- A lazer on the palettes passes no override.
+function ACFLazers.GetBeamColor(caliber, colorSet, override)
+    local C = ACFLazers.Config
+    local red, green, blue
+
+    if override then
+        red, green, blue = override.r, override.g, override.b
+    else
+        local palette = C.BeamPalettes[(colorSet == true or colorSet == 1) and 1 or 0]
+        local count   = #palette
+        local spot    = ACFLazers.GetSizeFraction(caliber) * (count - 1)  -- 0 = first stop ... count-1 = last stop
+        local index   = math.min(math.floor(spot) + 1, count - 1)         -- the stop just before us
+        local mix     = spot - (index - 1)                                -- how far we are towards the next stop (0..1)
+        local from, to = palette[index], palette[index + 1]
+
+        red   = Lerp(mix, from[1], to[1])
+        green = Lerp(mix, from[2], to[2])
+        blue  = Lerp(mix, from[3], to[3])
+
+        -- Blending two bright colours can give a dull one halfway (red + green = muddy olive). Scaling so the strongest channel is full
+        -- keeps every blend as bright as the stops themselves (that olive becomes a clean yellow).
+        local strongest = math.max(red, green, blue)
+
+        if strongest > 0 then
+            local boost = 255 / strongest
+
+            red, green, blue = red * boost, green * boost, blue * boost
+        end
+    end
+
+    return Color(math.Round(red), math.Round(green), math.Round(blue), 255)
+end
+
+-- How long a fire lasts, in seconds, for a lazer of this caliber: BurnTimeMin at startCaliber up to BurnTimeMax at CaliberMax
+-- (a straight line between). startCaliber is optional and defaults to CaliberMin (that is the wooden-prop scale).
+function ACFLazers.GetBurnSeconds(caliber, startCaliber)
+    local C = ACFLazers.Config
+
+    startCaliber = startCaliber or C.CaliberMin
+
+    local span = math.max(C.CaliberMax - startCaliber, 0.0001)
+    local t    = math.Clamp((caliber - startCaliber) / span, 0, 1)
+
+    return Lerp(t, C.BurnTimeMin, C.BurnTimeMax)
+end
+
+-- Which surfaces catch fire. Wood only for now; add other MAT_* names to the list (MAT_FOLIAGE? MAT_PLASTIC?) if you want more.
+local FlammableMaterials = {
+    [MAT_WOOD] = true,
+}
+
+--- Explosive props (barrels, gas cans, propane tanks ...) are recognised by their MODEL NAME: if the lowercase model path contains
+--- any of these pieces of text, the prop counts as explosive and burns like wood. [GUESS] my list of the usual Half-Life 2 explosive models; add your own.
+ACFLazers.ExplosiveModelPatterns = ACFLazers.ExplosiveModelPatterns or {}
+table.Empty(ACFLazers.ExplosiveModelPatterns)
+table.Add(ACFLazers.ExplosiveModelPatterns, {
+    "explosive",   -- oildrum001_explosive (props_c17 and props_phx), explosive_butane_can, ...
+    "gascan",      -- props_junk/gascan001a
+    "propane",     -- props_junk/propane_tank001a, PropaneCanister001a, firetrap_propanecanister01a
+    "butane",
+})
+
+--- Is this prop explosive? Server side. The answer is remembered on the entity (the model never changes, and GetKeyValues builds a table every call).
+--- Second check: a prop that has an "ExplodeDamage" key value above 0 (what the engine uses for breakable explosive props) [GUESS that GetKeyValues shows it].
+function ACFLazers.IsExplosiveProp(ent)
+    if not IsValid(ent) then return false end
+
+    local cached = ent.ACFLazers_Explosive
+
+    if cached ~= nil then return cached end
+
+    local result = false
+    local model  = string.lower(ent:GetModel() or "")
+
+    for _, piece in ipairs(ACFLazers.ExplosiveModelPatterns) do
+        if string.find(model, piece, 1, true) then -- true = plain text search, not a pattern
+            result = true
+            break
+        end
+    end
+
+    if not result then
+        local ok, kv = pcall(ent.GetKeyValues, ent)
+
+        if ok and istable(kv) and (tonumber(kv.ExplodeDamage) or tonumber(kv.explodedamage) or 0) > 0 then
+            result = true
+        end
+    end
+
+    ent.ACFLazers_Explosive = result
+
+    return result
+end
+
+--- Does a hit on this surface (and this prop) start a fire? Wood by surface material; explosive props by their model, whatever they are made of.
+function ACFLazers.IsFlammable(matType, ent)
+    if FlammableMaterials[matType] == true then return true end
+
+    return ent ~= nil and ACFLazers.IsExplosiveProp(ent)
+end

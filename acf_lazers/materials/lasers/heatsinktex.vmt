@@ -1,0 +1,9 @@
+"VertexLitGeneric"
+{
+	"$basetexture""lasers\heatsinktex"
+	"$surfaceprop""metal"
+	"$translucent" 0
+
+
+
+}

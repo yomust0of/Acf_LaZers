@@ -1,0 +1,9 @@
+"VertexLitGeneric"
+{
+	"$basetexture""lasers\captex"
+	"$surfaceprop""metal"
+	"$translucent" 0
+
+
+
+}
