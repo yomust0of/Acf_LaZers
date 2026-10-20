@@ -1,9 +1,13 @@
 -- =========================================================================
--- CHANGES vs the init.lua you have now (version 10). Search this file for [CHANGED n].
---   1  The version line says 13.5
---   2  Everything BEHIND a plate the beam burned through now takes the damage multiplier that PLATE took (focal curve x distance falloff at the plate's own distance, remembered
---      in beam.penMult), times the usual slice of PenDamageFraction, instead of the multiplier at its own (farther) hit distance. People behind the plate follow the same rule.
---      The angle effect of each prop it lands on, and the small-lazer boost, still apply as before. What decides whether the beam gets through is unchanged.
+-- ACF LAZER: SERVER FILE
+-- Goes to:  lua/entities/acf_lazer/init.lua      (the server runs this one. The CLIENT file is cl_init.lua next to it: never put this file there)
+--
+-- CHANGES vs the init.lua you have now (version 13.5). Search this file for [CHANGED n].
+--   1  The version line says 14
+--   2  THE BEAM'S TRACE MASK. FireLaserBeam traced with MASK_SHOT alone, which ACF's own bullets never do. The beam now traces with ACF's own bullet rule for its caliber:
+--      mask = ACFLazers.GetBeamMask(caliber) (lua/autorun/acf_lazers_config.lua, new in this batch; the number is the knob BeamMaskSmallBelowMM). Nothing else about the trace changed.
+--   3  A LOAD-TIME CHECK. If acf_lazers_config.lua is the OLD one (it has no GetBeamMask) this file prints one clear error to the console and stops loading, instead of failing on every
+--      beam tick. It fixes nothing by itself: it only makes a half-copied batch obvious.
 -- =========================================================================
 
 AddCSLuaFile("cl_init.lua")
@@ -25,8 +29,14 @@ if not LASER_CONFIG then
     return
 end
 
+-- [CHANGED 3] This file needs the config of the SAME batch (ACFLazers.GetBeamMask is new in 14). With the old config every beam tick would throw; say it once, clearly.
+if not ACFLazers.GetBeamMask then
+    ErrorNoHalt("[acf_lazer] ACFLazers.GetBeamMask is missing: lua/autorun/acf_lazers_config.lua is older than this init.lua. Copy the new config as well.\n")
+    return
+end
+
 -- Which version of this file is running. It is printed to the server console when the file loads, and every notice below carries it.
-local VERSION = "13.5" -- [CHANGED 1]
+local VERSION = "14" -- [CHANGED 1]
 MsgN("[acf_lazer] init.lua version " .. VERSION .. " loaded")
 
 -- Diagnosis switch, now a COMMAND. Admins (in their own console) and the server console type  acf_lazer_debug 1  and fire at a prop:
@@ -974,7 +984,7 @@ function ENT:DamageProp(target, tr, dir, dt, focal, doEffects, beam)
     --                                      PenArmourFraction x caliber x the damage multiplier of this hit ("the line", ACFLazers.GetPassLine:
     --                                      it follows the damage, so it is smaller far away or off the focus). The plate itself took normal damage this tick; everything
     --                                      behind it takes a slice of the damage this plate took (at THIS plate's multiplier, beam.penMult): nothing when the armour is right on the line,
-    --                                      the full PenDamageFraction once the armour is at PenRampEnd x the line or lower, a straight slide in between. [CHANGED 2]
+    --                                      the full PenDamageFraction once the armour is at PenRampEnd x the line or lower, a straight slide in between.
     -- [LATER] Burst lazers may want different numbers: make PenArmourFraction / PenDamageFraction depend on the lazer type here.
     local passes = false
 
@@ -993,7 +1003,7 @@ function ENT:DamageProp(target, tr, dir, dt, focal, doEffects, beam)
             passes           = true
             beam.penetrated  = true
             beam.scale       = LASER_CONFIG.PenDamageFraction * howFar
-            beam.penMult     = focal -- [CHANGED 2] remember the multiplier THIS plate took: everything behind it uses it (ProcessLaserImpact, where focal is worked out)
+            beam.penMult     = focal -- remember the multiplier THIS plate took: everything behind it uses it (ProcessLaserImpact, where focal is worked out)
         end
     end
 
@@ -1023,7 +1033,7 @@ function ENT:ProcessLaserImpact(tr, dir, dt, doEffects, beam)
 
     local focal = self:CalculateDamageMult((tr.HitPos - self:GetMuzzlePos()):Length()) -- "focal" now means focal curve x distance falloff
 
-    -- [CHANGED 2] Behind a plate the beam burned through (beam.penetrated), everything takes the multiplier that plate took (beam.penMult, set in DamageProp)
+    -- Behind a plate the beam burned through (beam.penetrated), everything takes the multiplier that plate took (beam.penMult, set in DamageProp)
     -- and the slice beam.scale of it, not the multiplier at its own, farther, distance. People get the same.
     if beam.penetrated and beam.penMult then
         focal = beam.penMult
@@ -1060,6 +1070,7 @@ function ENT:FireLaserBeam(dt)
     local cone      = self:UpdateWobble()       -- pick this tick's aim error first (it is published to clients too)...
     local dir       = self:GetBeamDirection()   -- ...then trace along it (shared.lua). Healthy lazer = exactly GetForward().
     local filter    = { self }
+    local mask      = ACFLazers.GetBeamMask(self:GetCaliber()) -- [CHANGED 2] ACF's own bullet mask for this caliber (config), decided once per tick
     local from      = startPos
     local remaining = self.BeamRange -- how far this lazer's beam really reaches (damage is 0 at the end)
 
@@ -1078,7 +1089,7 @@ function ENT:FireLaserBeam(dt)
     -- The beam's own state, shared by everything it hits this tick:
     --   scale      = its strength: 1 = full. After it burns through a plate this becomes a slice of PenDamageFraction (see DamageProp).
     --   penetrated = true once it has burned through a plate; the next plate that survives it will stop it.
-    --   penMult    = the damage multiplier (focal curve x falloff) the burned-through plate took; everything behind it uses this one [CHANGED 2]
+    --   penMult    = the damage multiplier (focal curve x falloff) the burned-through plate took; everything behind it uses this one
     local beam = { scale = 1, penetrated = false, penMult = nil }
 
     for _ = 1, LASER_CONFIG.MaxBeamHits do
@@ -1087,12 +1098,13 @@ function ENT:FireLaserBeam(dt)
             break
         end
 
-        -- ACF.trace (acf/core/utilities/traces_sh.lua:73) = util.TraceLine that also skips clipped-away parts of props
+        -- ACF.trace (acf/core/utilities/traces_sh.lua:73) = util.TraceLine that also skips clipped-away parts of props.
+        -- [CHANGED 2] The mask is no longer MASK_SHOT: it is what an ACF bullet of this caliber uses (see the knob BeamMaskSmallBelowMM in the config).
         local tr = ACF.trace({
             start  = from,
             endpos = from + dir * remaining,
             filter = filter,
-            mask   = MASK_SHOT
+            mask   = mask
         })
 
         if not tr.Hit then
