@@ -8,6 +8,8 @@
 --   1  THE HEAT KNOBS: one new block "HEAT" (everything starting with Heat...), between the generator hub and the linking tools. Temperatures are typed in Fahrenheit.
 --   2  THE HEAT HELPERS: new pure-maths section "HEAT HELPERS" (cooling law, heat capacity from mass, the scalars along the size of a lazer / capacitor / generator, the lock-out
 --      percent, the quadratic damage, the explosion filler). Nothing in it touches the game.
+--   3  (15.1) LAZER HEAT x5: HeatLazerSmall and HeatLazerBig are 5 (were 1). A lazer makes five times as much heat per kJ it spends, and its beam heats props five times as fast (the beam's heat
+--      is built from the same rate). To keep the props' heating as it was, set HeatHitSmall and HeatHitBig to 0.2.
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -353,8 +355,8 @@ table.Merge(ACFLazers.Config, {
     HeatMaxDeltaTime    = 0.5,    -- seconds. The longest "time since the last check" a heat check will act for (a lag spike cannot turn into one huge burst of heat damage)
 
     -- WHERE THE HEAT COMES FROM. Small .. Big = a straight line over the size of the thing (see the top of this block).
-    HeatLazerSmall      = 1,      -- a firing lazer adds this many kJ of heat per kJ it spends (the draw). 1 = all of it
-    HeatLazerBig        = 1,
+    HeatLazerSmall      = 5,      -- a firing lazer adds this many kJ of heat per kJ it spends (the draw). 1 = all of it, 5 = five times as much [CHANGED 3] (15.1: was 1; the beam's heat on props is built from this same rate, so it follows)
+    HeatLazerBig        = 5,
     HeatHitSmall        = 1,      -- a beam adds (the lazer's heat rate) x this x the same focus / angle / burn-through weakening as its damage to the prop it hits
     HeatHitBig          = 1,
     HeatCapSmall        = 1 / 3,  -- a capacitor adds this many kJ of heat per kJ that goes in, and again per kJ that goes out
