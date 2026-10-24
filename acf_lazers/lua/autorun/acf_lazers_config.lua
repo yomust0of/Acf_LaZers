@@ -1,12 +1,13 @@
 -- =========================================================================
 -- ACF LAZERS: SHARED CONFIG
 -- Goes to:  lua/autorun/acf_lazers_config.lua
---           (same file in the game folder and on the server. The new acf_lazer/init.lua REFUSES to load with the old config: it needs ACFLazers.GetBeamMask from this one)
+--           (same file in the game folder and on the server. The new lazer / capacitor / generator init.lua files REFUSE to load with the old config: they need the heat knobs and
+--            ACFLazers.HeatCool from this one, and the new file lua/autorun/acf_lazers_heat.lua)
 --
--- CHANGES vs the config you have now (handoff 13.5). Search this file for [CHANGED n].
---   1  BEAM TRACE MASK. New knob BeamMaskSmallBelowMM (30 mm) and new function ACFLazers.GetBeamMask(caliber). The lazer's beam used to be traced with MASK_SHOT alone; ACF's own
---      bullets never use that. They use MASK_SOLID, and bullets under 3 cm use MASK_SOLID-and-MASK_SHOT. The beam now asks for exactly what a bullet of its size asks for.
---      (Why: freshly parented props were invisible to the lazer but not to ACF's guns. See the long note at BeamMaskSmallBelowMM below.)
+-- CHANGES vs the config you have now (handoff 14). Search this file for [CHANGED n].
+--   1  THE HEAT KNOBS: one new block "HEAT" (everything starting with Heat...), between the generator hub and the linking tools. Temperatures are typed in Fahrenheit.
+--   2  THE HEAT HELPERS: new pure-maths section "HEAT HELPERS" (cooling law, heat capacity from mass, the scalars along the size of a lazer / capacitor / generator, the lock-out
+--      percent, the quadratic damage, the explosion filler). Nothing in it touches the game.
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -98,7 +99,7 @@ table.Merge(ACFLazers.Config, {
     --                                  so a cap below that cuts the beam where its damage is still above 0 (and FalloffAtRange 1 = no falloff = the beam goes all the way to this number)
     MaxBeamHits     = 32,     -- safety cap: most things one beam can pass through in one tick
     MaxDeltaTime    = 0.1,    -- seconds. Caps the "time since last tick" used for damage, so a lag spike can't dump a huge hit
-    -- WHAT THE BEAM CAN SEE (trace mask). [CHANGED 1]
+    -- WHAT THE BEAM CAN SEE (trace mask).
     -- The beam is found with a trace (acf_lazer/init.lua, ENT:FireLaserBeam) and a trace only hits what its MASK lists. The lazer used MASK_SHOT on its own.
     -- ACF's own bullets never do: they trace with MASK_SOLID, and bullets under 3 cm trace with "MASK_SOLID and MASK_SHOT"
     -- [SEEN acf/ballistics/ballistics_sv.lua:146-150; the 3 is in cm: acf/core/round_functions.lua:57 says "Bullet caliber will have to stay in cm"].
@@ -318,6 +319,74 @@ table.Merge(ACFLazers.Config, {
     GenArmourAtOne     = 40,    -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod)
     GenHealthMult      = 1,     -- multiplier on the health ACF works out from the surface area
     GenMaxPerPlayer    = 10,    -- default for the server variable sbox_maxacf_generators
+
+    -- ===================== HEAT (the heat core. The radiator entity comes in the next batch) ===================== [CHANGED 1]
+    -- WHAT IT IS. Any entity can hold heat. Heat is kept as kJ ABOVE room temperature, and an entity's heat CAPACITY is its mass: kJ per kelvin = mass (kg) x HeatSpecificHeat.
+    -- A heavy plate needs a lot of kJ to warm up, a light lazer very few. An entity at room temperature costs nothing to keep track of, and nothing heats unless we say so:
+    --   * a lazer that is firing heats ITSELF          (the kJ it spends x HeatLazerSmall .. HeatLazerBig)
+    --   * a lazer BEAM heats the props it hits          (the same heat rate x HeatHitSmall .. HeatHitBig, weakened by focus / angle / burn-through exactly like the damage is)
+    --   * a capacitor heats when energy goes in OR out  (kJ moved x HeatCapSmall .. HeatCapBig). A generator hub heats when it makes energy (kJ made x HeatGenSmall .. HeatGenBig)
+    -- Everything cools back down by itself (HeatCoolTau below). The temperature players see is always Fahrenheit, and every temperature typed in this block is Fahrenheit too.
+    -- "Small .. Big" pairs: the Small number is for the smallest size of that thing (CaliberMin lazer, CapDiameterMin capacitor, GenHPMin hub), the Big number for the biggest, a straight line between.
+    HeatSpecificHeat    = 0.49,   -- kJ per kg per kelvin: the energy that warms 1 kg by 1 K. 0.49 = steel [KNOW]. Higher = every entity needs more kJ per degree (heat sources warm things more slowly)
+    HeatMinMassKg       = 1,      -- kg. An entity with no (or a tiny) physics mass counts as at least this much, so the maths never divides by zero
+    HeatAmbientK        = 288.15, -- kelvin. Room temperature; used ONLY if ACF's own ACF.AmbientTemperature is missing [SEEN acf/core/globals.lua:252: 288.15 K = 15 C = 59 F]
+    HeatHEPowerFallback = 8000,   -- kJ per kg of HE filler; used ONLY if ACF.HEPower is missing [SEEN acf/core/globals.lua:270]
+
+    -- HOT, AND THE PLATE RULE. A prop is HOT once it reaches HeatHotF. That temperature is the "100%" of a plate (0% = room temperature, 59 F).
+    HeatHotF            = 1100,   -- degrees Fahrenheit. 1100 F = 100% of a plate (a dull-red steel). Lower = plates get hot sooner
+    HeatPenGate         = true,   -- true = a beam burns THROUGH a plate only if the plate is HOT (100% or more) AND the old armour test allows it (armour under 1/3 x caliber x damage multiplier).
+    --                               A destroyed plate always lets the beam through. false = the old rule alone (heat never matters for burn-through)
+
+    -- COOLING. Every entity cools toward room temperature by itself:  loss per second = excess x a x (1 + HeatCoolHotBoost x excess / the HOT excess),  a = multiplier / HeatCoolTau.
+    -- That is an ordinary exponential cooling (time constant HeatCoolTau) that cools faster the hotter the thing is: at the HOT temperature it cools (1 + HeatCoolHotBoost) times as fast.
+    -- All props cool at the same rate. Lazers and the other ACF entities (capacitors, generators ...) have a multiplier of their own, relative to props.
+    HeatCoolTau         = 300,    -- seconds. The base cooling time constant of every prop: after this long a mildly warm prop has lost 63% of its excess heat. Lower = cools faster
+    HeatCoolHotBoost    = 1,      -- extra cooling at the HOT temperature, as a multiple of the base (0 = plain exponential at every temperature, 1 = twice as fast at HOT, 3 = four times)
+    HeatCoolMultLazer   = 1,      -- cooling speed of lazers relative to props (2 = twice as fast)
+    HeatCoolMultACF     = 1,      -- cooling speed of every OTHER ACF entity (capacitors, generators ...) relative to props
+
+    -- BOOKKEEPING (nothing to tune unless you are chasing lag)
+    HeatForgetBelowK    = 0.5,    -- kelvin above room temperature. A cooling entity this close to room temperature is forgotten (it costs nothing again)
+    HeatSweepInterval   = 5,      -- seconds between the sweeps that forget cooled-down entities and entities that were removed
+    HeatCheckInterval   = 0.1,    -- seconds between a lazer's heat checks (lock-out, heat damage). A beam hit / a shot is counted at once, only the checks wait
+    HeatMaxDeltaTime    = 0.5,    -- seconds. The longest "time since the last check" a heat check will act for (a lag spike cannot turn into one huge burst of heat damage)
+
+    -- WHERE THE HEAT COMES FROM. Small .. Big = a straight line over the size of the thing (see the top of this block).
+    HeatLazerSmall      = 1,      -- a firing lazer adds this many kJ of heat per kJ it spends (the draw). 1 = all of it
+    HeatLazerBig        = 1,
+    HeatHitSmall        = 1,      -- a beam adds (the lazer's heat rate) x this x the same focus / angle / burn-through weakening as its damage to the prop it hits
+    HeatHitBig          = 1,
+    HeatCapSmall        = 1 / 3,  -- a capacitor adds this many kJ of heat per kJ that goes in, and again per kJ that goes out
+    HeatCapBig          = 1 / 3,
+    HeatGenSmall        = 1,      -- a generator hub adds this many kJ of heat per kJ it makes
+    HeatGenBig          = 1,
+
+    -- LAZERS: THE LIMIT, THE LOCK-OUT AND THE DAMAGE.
+    -- HeatLazerCapF is 100% for a lazer (0% = room temperature). Above 100% the lazer damages itself (see HeatLazerDamage).
+    -- LOCK-OUT. When a lazer's heat reaches HeatLockStartPct it is marked overheated, but the beam keeps going for as long as Fire is held. When the lazer stops (Fire released, or the
+    -- capacitors ran dry) it goes into COOLING MODE: "unavailable" until its heat is down to HeatLockEndPct (small .. big lazer). If it stopped BELOW HeatLockStartPct it was never
+    -- marked, and it can fire again whenever the capacitors hold the power. If Fire is still held when the cooling ends, the lazer starts again by itself (like a lazer that ran dry).
+    HeatLazerCapF       = 1100,   -- degrees Fahrenheit. 100% of a lazer. Separate from HeatHotF so the two can be tuned apart (they start equal)
+    HeatLockStartPct    = 90,     -- percent of the lazer's limit. Reaching this marks the lazer overheated (one number for every lazer)
+    HeatLockEndPctSmall = 25,     -- percent of the lazer's limit the heat must fall to before the lazer can fire again: the smallest lazer ...
+    HeatLockEndPctBig   = 25,     -- ... and the biggest lazer. Always kept under HeatLockStartPct
+    HeatLazerDamage     = 4,      -- percent of the lazer's MAX HEALTH lost per second when it is twice as hot as its limit (200%). The loss grows with the SQUARE of how far over the limit it is: half as
+    --                               far over (150%) = a quarter of this, 10% over = 1/100 of this. 0 = lazers never hurt themselves
+    HeatExplodeChance   = 0.5,    -- 0..1. A lazer that dies from its own heat WHILE FIRING explodes with this chance; otherwise (and always when it was not firing) it just dies
+    HeatExplodeKJMult   = 2,      -- the explosion's energy = this x the lazer's draw (kJ per second), turned into HE filler the way a capacitor does (kJ / ACF.HEPower, so NOT literal kg)
+    HeatExplosionMult   = 1,      -- multiplier on that filler. 1 = exactly the HE equivalent; raise it for bigger bangs
+    HeatDeathDebrisPower = 20000, -- [GUESS] how hard the pieces fly when a lazer simply dies of heat (not capped by anything but MaxDebrisPower)
+
+    -- CAPACITORS: THE CRITICAL HEAT AND THE DAMAGE.
+    -- A capacitor's critical heat is this share of the HOT excess (HeatHotF minus room temperature): 0.5 = it is critical at half the plate temperature rise (about 579 F with the defaults).
+    -- Above it the capacitor damages itself, quadratically like the lazer. When heat kills it, it blows up like any destroyed capacitor (releasing what it stores); a damaged-but-alive
+    -- capacitor also rolls its usual explosion dice (CapExplode...), because heat damage is damage.
+    HeatCapCritFrac     = 0.5,
+    HeatCapDamage       = 4,      -- percent of the capacitor's MAX HEALTH lost per second at twice its critical heat (200%), growing with the square of how far over it is. 0 = never
+
+    -- TESTING AID
+    HeatInfoDistance    = 4096,   -- units. The console command acf_lazers_heat_info prints the heat of whatever you are looking at, up to this far away
 
     -- ===================== LINKING TOOLS =====================
     -- The things the link tools (right-click / shift / reload on the lazer, capacitor and generator tools) can select and link. ACF's own link system decides which PAIRS work:
@@ -544,7 +613,7 @@ function ACFLazers.GetPassLine(caliber, damageMult)
 end
 
 --- The trace mask for a beam of this caliber (mm): ACF's own rule for its bullets [SEEN acf/ballistics/ballistics_sv.lua:146-150, Caliber there is in cm]. Below BeamMaskSmallBelowMM it is
---- MASK_SOLID and MASK_SHOT (no hit-boxes, grates see-through), at or above it MASK_SOLID (no hit-boxes, grates solid). MASK_SHOT alone is never used any more. [CHANGED 1]
+--- MASK_SOLID and MASK_SHOT (no hit-boxes, grates see-through), at or above it MASK_SOLID (no hit-boxes, grates solid). MASK_SHOT alone is never used any more.
 function ACFLazers.GetBeamMask(caliber)
     if (tonumber(caliber) or 0) < ACFLazers.Config.BeamMaskSmallBelowMM then
         return bit.band(MASK_SOLID, MASK_SHOT)
@@ -614,6 +683,109 @@ end
 --- Mass in kg of a capacitor of this diameter.
 function ACFLazers.GetCapMass(diameter)
     return math.max(1, math.Round(ACFLazers.Config.CapMassPerVolume * ACFLazers.GetCapVolume(diameter)))
+end
+
+-- ===================== HEAT HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 2]
+
+--- Fahrenheit <-> kelvin.
+function ACFLazers.FToK(f) return (f - 32) * 5 / 9 + 273.15 end
+function ACFLazers.KToF(k) return (k - 273.15) * 9 / 5 + 32 end
+
+--- Room temperature in kelvin: ACF's own number if it has one (ACF.AmbientTemperature), else the HeatAmbientK knob.
+function ACFLazers.GetHeatAmbientK()
+    local ambient = ACF and tonumber(ACF.AmbientTemperature)
+
+    if ambient and ambient > 0 then return ambient end -- (a NaN is not > 0, so it falls through to the knob too)
+
+    return ACFLazers.Config.HeatAmbientK
+end
+
+--- How many kelvin above room temperature a limit typed in Fahrenheit is (never less than 1, so a silly limit cannot make every percentage infinite).
+function ACFLazers.GetHeatRiseK(limitF)
+    local rise = ACFLazers.FToK(tonumber(limitF) or 0) - ACFLazers.GetHeatAmbientK()
+
+    if rise ~= rise then return 1 end
+
+    return math.max(rise, 1)
+end
+
+--- The three "100%"s, in kelvin above room temperature: a HOT plate, a lazer's limit, a capacitor's critical heat.
+function ACFLazers.GetHeatRiseHot()   return ACFLazers.GetHeatRiseK(ACFLazers.Config.HeatHotF) end
+function ACFLazers.GetHeatRiseLazer() return ACFLazers.GetHeatRiseK(ACFLazers.Config.HeatLazerCapF) end
+function ACFLazers.GetHeatRiseCap()   return math.max(ACFLazers.GetHeatRiseHot() * ACFLazers.Config.HeatCapCritFrac, 1) end
+
+--- Heat capacity in kJ per kelvin of something this heavy (kg).
+function ACFLazers.GetHeatCapacity(mass)
+    local C = ACFLazers.Config
+
+    mass = tonumber(mass) or 0
+
+    if mass ~= mass then mass = 0 end
+
+    return math.max(mass, C.HeatMinMassKg) * C.HeatSpecificHeat
+end
+
+--- Natural cooling. theta = kelvin above room temperature now, dt = seconds, mult = the cooling multiplier of this kind of entity (props 1). Returns theta after dt.
+--- The rule (see HeatCoolTau):  d(theta)/dt = -a x theta x (1 + HeatCoolHotBoost x theta / riseHot),  a = mult / HeatCoolTau.
+--- It has an exact solution, so one call is right for any dt: a long gap costs the same as a short one and cooling in two halves gives the same answer as in one go.
+function ACFLazers.HeatCool(theta, dt, mult)
+    local C = ACFLazers.Config
+
+    if not (theta and dt and theta > 0 and dt > 0) then return math.max(tonumber(theta) or 0, 0) end
+
+    mult = tonumber(mult) or 1
+
+    if mult <= 0 then return theta end
+
+    local a = mult / math.max(C.HeatCoolTau, 1e-6)
+    local b = a * math.max(C.HeatCoolHotBoost, 0) / ACFLazers.GetHeatRiseHot()
+    local e = math.exp(-a * dt)
+
+    return a * theta * e / (a + b * theta * (1 - e))
+end
+
+--- Along a size: t = 0 at the smallest thing, 1 at the biggest.
+local function HeatSizeLerp(t, small, big) return Lerp(math.Clamp(t, 0, 1), small, big) end
+
+--- kJ of heat per kJ a lazer of this caliber spends / per kJ of its heat rate a beam puts into a prop / per kJ a capacitor of this diameter moves / per kJ a generator of this rating makes.
+function ACFLazers.GetLazerHeatScalar(caliber) return HeatSizeLerp(ACFLazers.GetSizeFraction(caliber), ACFLazers.Config.HeatLazerSmall, ACFLazers.Config.HeatLazerBig) end
+function ACFLazers.GetLazerHitHeatMult(caliber) return HeatSizeLerp(ACFLazers.GetSizeFraction(caliber), ACFLazers.Config.HeatHitSmall, ACFLazers.Config.HeatHitBig) end
+
+function ACFLazers.GetCapHeatScalar(diameter)
+    local C = ACFLazers.Config
+
+    return HeatSizeLerp((diameter - C.CapDiameterMin) / math.max(C.CapDiameterMax - C.CapDiameterMin, 0.0001), C.HeatCapSmall, C.HeatCapBig)
+end
+
+function ACFLazers.GetGenHeatScalar(hp)
+    local C = ACFLazers.Config
+
+    return HeatSizeLerp((hp - C.GenHPMin) / math.max(C.GenHPMax - C.GenHPMin, 0.0001), C.HeatGenSmall, C.HeatGenBig)
+end
+
+--- Percent of its limit a lazer of this caliber must cool down to before it fires again. Never at or above the lock-start percent (that would lock it out for ever).
+function ACFLazers.GetLazerLockEndPct(caliber)
+    local C   = ACFLazers.Config
+    local lockEnd = HeatSizeLerp(ACFLazers.GetSizeFraction(caliber), C.HeatLockEndPctSmall, C.HeatLockEndPctBig)
+
+    return math.Clamp(lockEnd, 0, math.max(C.HeatLockStartPct - 1, 0))
+end
+
+--- Percent of max health lost per second at `over` (0 = right at the limit, 1 = twice the limit) for a base number (the damage knob = the loss at over 1): base x over^2.
+function ACFLazers.GetHeatDamagePct(over, base)
+    over = tonumber(over) or 0
+
+    if over ~= over or over <= 0 then return 0 end
+
+    return math.max(tonumber(base) or 0, 0) * over * over
+end
+
+--- HE filler (kg) of the explosion of a lazer that dies of heat while firing: its draw x HeatExplodeKJMult kJ, over ACF's kJ per kg of HE, x HeatExplosionMult.
+function ACFLazers.GetLazerExplosionFiller(caliber)
+    local C       = ACFLazers.Config
+    local hePower = ACF and tonumber(ACF.HEPower) or C.HeatHEPowerFallback
+
+    return ACFLazers.GetDrawRate(caliber) * C.HeatExplodeKJMult / math.max(hePower, 1e-6) * C.HeatExplosionMult
 end
 
 -- ===================== GENERATOR HUB HELPERS (pure maths: nothing here touches the game) =====================

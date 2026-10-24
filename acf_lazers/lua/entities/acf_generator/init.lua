@@ -1,13 +1,16 @@
 -- =========================================================================
--- CHANGES vs the generator init.lua you have now (version 12). Search this file for [CHANGED n].
---   [CHANGED 1] No more overload that breaks engine links. The hub takes AT MOST its rated hp from its engines in total; engines can push more, the rest is ignored (every engine's
---               load is scaled down together, so the engines feel no more drag than the rating). Hover text says when it is at its rating. CheckOverload is gone
---   [CHANGED 2] Damage: the energy made per hp is multiplied by ACFLazers.GetGenEfficiency(health): 1 at full health, GenDamagedEfficiency (0.5) at 0 health. The engines are still
---               loaded by the same hp: only the kJ drop. Hover text shows the efficiency
---   [CHANGED 3] The "At its rating" hover line quotes what the linked engines are RATED for (their peak hp added up) instead of the load the hub would have asked for: that number
---               swells with rpm when the cap holds an engine back, and read like a power no engine could give. New function ENT:GetEnginesRatedHP, display only
---   Goes to:  lua/entities/acf_generator/init.lua
+-- ACF GENERATOR HUB: SERVER FILE
+-- Goes to:  lua/entities/acf_generator/init.lua
+--           NEEDS the new config (lua/autorun/acf_lazers_config.lua) AND the new file lua/autorun/acf_lazers_heat.lua: it refuses to load without them
 --
+-- CHANGES vs the generator init.lua you have now (version 13). Search this file for [CHANGED n].
+--   1  The version line says 15
+--   2  A LOAD-TIME CHECK for the heat system (ACFLazers.Heat, from acf_lazers_heat.lua). Missing = one clear console error and the generator does not load
+--   3  THE HUB HEATS while it makes energy: Run adds (kJ stored x the generator scalar HeatGenSmall .. HeatGenBig) of heat every tick. A hot hub has no penalty (yet)
+--   4  New wire outputs HeatKJ, HeatF, HeatPct (percent of the HOT temperature), the temperature line on the hover text, and the hover text refreshes as the heat moves
+--   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
+-- =========================================================================
+
 -- THE ACF GENERATOR HUB. A flywheel load: ACF engines are linked to it, it slows their flywheels (the "drag") and stores the power it took as kJ in the capacitors linked to it.
 --   * size: the tool slider is the RATED power in hp (config GenHPMin..GenHPMax); the model scale follows it through GenScaleKnots (50 hp 0.5, 350 hp 1, 3500 hp 2)
 --   * engines: linked the way ACF links an engine to a gearbox. Same distance rule (ACF.MobilityLinkDistance), same kind of angle test (see GetShaftAngles) with the generator's own
@@ -18,7 +21,9 @@
 --     room nothing is taken from the engines. A capacitor with AllowCharge switched off takes nothing.
 --   * rating: the total hp taken from all engines is never more than the rated hp. The energy per hp (GenKJPerHP) is multiplied by 1 at full health down to GenDamagedEfficiency at 0.
 --   * wire:  input Draw (0 = take nothing ... 100 = take everything; unwired counts as GenDrawDefault)
---            outputs Energy (kJ per second going into the capacitors), HP (taken from the engines), Rated (hp rating), Load (percent of the rating), Engines, Full (1 = capacitors full)
+--            outputs Energy (kJ per second going into the capacitors), HP (taken from the engines), Rated (hp rating), Load (percent of the rating), Engines, Full (1 = capacitors full),
+--            HeatKJ, HeatF, HeatPct (percent of the HOT temperature)
+--   * heat: the hub warms by (kJ it makes x HeatGenSmall .. HeatGenBig) and cools by itself. A hot hub works as before
 -- All numbers live in lua/autorun/acf_lazers_config.lua (everything starting with Gen...).
 -- =========================================================================
 
@@ -37,7 +42,15 @@ if not CFG then
     return
 end
 
-local VERSION = "13"
+-- [CHANGED 2] The heat system lives in lua/autorun/acf_lazers_heat.lua (a new file in this batch) with its maths in the config.
+if not (ACFLazers.Heat and ACFLazers.Heat.Add and ACFLazers.GetHeatCapacity) then
+    ErrorNoHalt("[acf_generator] the heat system is missing: copy lua/autorun/acf_lazers_heat.lua (new) and the new lua/autorun/acf_lazers_config.lua, then restart.\n")
+    return
+end
+
+local Heat = ACFLazers.Heat
+
+local VERSION = "15" -- [CHANGED 1]
 MsgN("[acf_generator] init.lua version " .. VERSION .. " loaded")
 
 -- How many generators one player may own (GMod reads a server variable called sbox_max<name>; CreateConVar does nothing if it already exists).
@@ -127,7 +140,10 @@ function ENT:Initialize()
             "Rated",  -- the rating in hp
             "Load",   -- percent of the rating
             "Engines", -- how many engines are linked
-            "Full"    -- 1 while the capacitors are full (nothing is taken from the engines)
+            "Full",   -- 1 while the capacitors are full (nothing is taken from the engines)
+            "HeatKJ", -- [CHANGED 4] kJ of heat above room temperature
+            "HeatF",  -- [CHANGED 4] temperature in Fahrenheit
+            "HeatPct" -- [CHANGED 4] percent of the HOT temperature (100 = HOT)
         })
     end
 
@@ -460,6 +476,8 @@ function ENT:Run(now, dt)
     end
 
     if storedKJ > 0 then
+        Heat.Add(self, storedKJ * ACFLazers.GetGenHeatScalar(self.RatedHP)) -- [CHANGED 3] making energy heats the hub
+
         local takes = ACFLazers.WaterFill(limits, storedKJ)
 
         for i, cap in ipairs(caps) do
@@ -507,7 +525,7 @@ function ENT:GetHealthFraction()
     return 1
 end
 
--- hp the linked engines are rated for: their peak power (ACF's own number for each engine), added up. Display only (the hover text). [CHANGED 3]
+-- hp the linked engines are rated for: their peak power (ACF's own number for each engine), added up. Display only (the hover text).
 function ENT:GetEnginesRatedHP()
     local total = 0
 
@@ -550,6 +568,9 @@ function ENT:UpdateWireOutputs()
     WireLib.TriggerOutput(self, "Load", self.RatedHP > 0 and self.PowerHP / self.RatedHP * 100 or 0)
     WireLib.TriggerOutput(self, "Engines", self:CountEngines())
     WireLib.TriggerOutput(self, "Full", (next(self.Caps) ~= nil and self.Room <= 0 and self.Refusing == 0) and 1 or 0)
+    WireLib.TriggerOutput(self, "HeatKJ", Heat.GetKJ(self)) -- [CHANGED 4]
+    WireLib.TriggerOutput(self, "HeatF", Heat.GetTempF(self))
+    WireLib.TriggerOutput(self, "HeatPct", Heat.GetPctHot(self) * 100)
 end
 
 -- The hover text (ACF's overlay system calls this; ENT:UpdateOverlay() asks it to refresh).
@@ -571,6 +592,7 @@ function ENT:ACF_UpdateOverlayState(State)
     State:AddKeyValue("Making", string.format("%.0f kJ/s", self.EnergyRate))
     State:AddKeyValue("Health efficiency", string.format("%.0f%% (x%.2f energy per hp)", self.Efficiency * 100, self.Efficiency))
     State:AddKeyValue("Draw input", string.format("%.0f%%", self:GetDraw() * 100))
+    State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of HOT)", Heat.GetTempF(self), Heat.GetPctHot(self) * 100)) -- [CHANGED 4]
     State:AddKeyValue("Linked", string.format("%d engine(s), %d capacitor(s)", linkedEngines, linkedCaps))
 
     if linkedCaps > 0 then
@@ -589,7 +611,7 @@ end
 
 -- Refresh the hover text, but only when something worth showing changed (ACF's overlay networks changes).
 function ENT:RefreshOverlay()
-    local signature = self.Status .. "|" .. math.floor(self.PowerHP / 10) .. "|" .. self:CountEngines() .. "|" .. math.floor(self:GetDraw() * 100) .. "|" .. math.floor(self.Efficiency * 100)
+    local signature = self.Status .. "|" .. math.floor(self.PowerHP / 10) .. "|" .. self:CountEngines() .. "|" .. math.floor(self:GetDraw() * 100) .. "|" .. math.floor(self.Efficiency * 100) .. "|" .. math.floor(Heat.GetPctHot(self) * 20) -- [CHANGED 4] the heat in steps of 5% of HOT
 
     if signature ~= self.OverlaySig then
         self.OverlaySig = signature

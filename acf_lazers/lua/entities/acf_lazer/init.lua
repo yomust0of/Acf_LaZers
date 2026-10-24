@@ -1,13 +1,19 @@
 -- =========================================================================
 -- ACF LAZER: SERVER FILE
 -- Goes to:  lua/entities/acf_lazer/init.lua      (the server runs this one. The CLIENT file is cl_init.lua next to it: never put this file there)
+--           NEEDS the new config (lua/autorun/acf_lazers_config.lua) AND the new file lua/autorun/acf_lazers_heat.lua: it refuses to load without them
 --
--- CHANGES vs the init.lua you have now (version 13.5). Search this file for [CHANGED n].
---   1  The version line says 14
---   2  THE BEAM'S TRACE MASK. FireLaserBeam traced with MASK_SHOT alone, which ACF's own bullets never do. The beam now traces with ACF's own bullet rule for its caliber:
---      mask = ACFLazers.GetBeamMask(caliber) (lua/autorun/acf_lazers_config.lua, new in this batch; the number is the knob BeamMaskSmallBelowMM). Nothing else about the trace changed.
---   3  A LOAD-TIME CHECK. If acf_lazers_config.lua is the OLD one (it has no GetBeamMask) this file prints one clear error to the console and stops loading, instead of failing on every
---      beam tick. It fixes nothing by itself: it only makes a half-copied batch obvious.
+-- CHANGES vs the init.lua you have now (version 14). Search this file for [CHANGED n].
+--   1  The version line says 15
+--   2  A LOAD-TIME CHECK for the heat system (ACFLazers.Heat, from acf_lazers_heat.lua). Missing = one clear console error and the lazer does not load
+--   3  LAZER HEAT (new section). The lazer's own heat: GetHeatPct, GetHeatRate, CanStart, HeatEvaluate (overheated / cooling), HeatThink, TakeHeatDamage, HeatDeath.
+--      New fields in Initialize (HeatHot, HeatCooling, NextHeatCheck, LastHeatCheck) and four new wire outputs: HeatKJ, HeatF, HeatPct (percent of the lazer's limit), Cooling
+--   4  THE SHOT HEATS THE LAZER: Think adds draw x scalar x dt of heat after every paid tick, and runs HeatThink
+--   5  COOLING MODE: starting and restarting go through CanStart (not while cooling). SetFiringState(false) works out the overheated / cooling state. A lazer that is cooling is not a
+--      "dud" (NoPower stays 0) and its hover text says Cooling: unavailable until N% heat
+--   6  The hover text shows the temperature (Fahrenheit) and the percent of the limit, and says when the lazer is damaging itself
+--   7  THE BEAM HEATS WHAT IT HITS, and a plate has to be HOT to be burned through. DamageProp adds heat to every prop ACF accepted the hit on; the burn-through test has one more
+--      condition (HeatPenGate in the config). A destroyed plate still lets the beam through
 -- =========================================================================
 
 AddCSLuaFile("cl_init.lua")
@@ -29,14 +35,22 @@ if not LASER_CONFIG then
     return
 end
 
--- [CHANGED 3] This file needs the config of the SAME batch (ACFLazers.GetBeamMask is new in 14). With the old config every beam tick would throw; say it once, clearly.
+-- This file needs the config of the SAME batch (ACFLazers.GetBeamMask is new in 14). With the old config every beam tick would throw; say it once, clearly.
 if not ACFLazers.GetBeamMask then
     ErrorNoHalt("[acf_lazer] ACFLazers.GetBeamMask is missing: lua/autorun/acf_lazers_config.lua is older than this init.lua. Copy the new config as well.\n")
     return
 end
 
+-- [CHANGED 2] The heat system lives in lua/autorun/acf_lazers_heat.lua (a new file in this batch) with its maths in the config. Without them every beam tick would throw; say so once, clearly.
+if not (ACFLazers.Heat and ACFLazers.Heat.Add and ACFLazers.GetHeatCapacity) then
+    ErrorNoHalt("[acf_lazer] the heat system is missing: copy lua/autorun/acf_lazers_heat.lua (new) and the new lua/autorun/acf_lazers_config.lua, then restart.\n")
+    return
+end
+
+local Heat = ACFLazers.Heat
+
 -- Which version of this file is running. It is printed to the server console when the file loads, and every notice below carries it.
-local VERSION = "14" -- [CHANGED 1]
+local VERSION = "15" -- [CHANGED 1]
 MsgN("[acf_lazer] init.lua version " .. VERSION .. " loaded")
 
 -- Diagnosis switch, now a COMMAND. Admins (in their own console) and the server console type  acf_lazer_debug 1  and fire at a prop:
@@ -157,6 +171,11 @@ function ENT:Initialize()
     self.LastBeamTime = 0     -- replaces NextFire / FireInterval
     self.WobbleSeed   = math.Rand(0, 100) -- this lazer's own starting phase for the wobble, so two damaged lazers never drift in step
     self.NextHitEffect = 0    -- per-lazer cooldown so the spark / dust effects don't flood the network
+    self.HeatHot       = false -- [CHANGED 3] marked overheated (the heat reached HeatLockStartPct); stays until the heat is down to the lock-end percent
+    self.HeatCooling   = false -- [CHANGED 3] unavailable: a marked lazer that is not firing. Cleared at the lock-end percent
+    self.HeatDying     = false -- [CHANGED 3]
+    self.NextHeatCheck = 0     -- [CHANGED 3] CurTime() of the next heat check (HeatThink)
+    self.LastHeatCheck = CurTime() -- [CHANGED 3]
     -- end-of-beam sounds (see the BeamSounds block below). All start empty; they are created on demand.
     self.SoundEmitter  = nil  -- the invisible entity that carries the sounds to the beam end
     self.BurnSnd       = nil  -- CSoundPatch (the object CreateSound returns): the burn loop
@@ -186,7 +205,11 @@ function ENT:Initialize()
             "PowerDraw",    -- kJ per second this lazer eats while firing
             "Energy",       -- kJ in the capacitor pool this lazer can draw from right now
             "NoPower",      -- 1 while Fire is on but the pool is too low to fire (a "dud")
-            "Wobble"        -- the current wobble cone in MOA (0 = perfect aim); refreshed when the lazer starts / stops and while it fires
+            "Wobble",       -- the current wobble cone in MOA (0 = perfect aim); refreshed when the lazer starts / stops and while it fires
+            "HeatKJ",       -- [CHANGED 3] kJ of heat above room temperature
+            "HeatF",        -- [CHANGED 3] temperature in Fahrenheit
+            "HeatPct",      -- [CHANGED 3] percent of the lazer's heat limit (100 = at the limit, above = damaging itself)
+            "Cooling"       -- [CHANGED 3] 1 while the lazer is overheated and not firing: unavailable until it has cooled down
         })
     end
 
@@ -204,7 +227,7 @@ local function VerifyData(Data)
     local focalMin, focalMax = ACFLazers.GetFocalLimits(Data.Caliber)
 
     Data.Focal       = math.Round(ACFLazers.ClampNumber(Data.Focal, LASER_CONFIG.FocalDefault, focalMin, focalMax), 2)
-    Data.FocusAmount = math.Round(ACFLazers.ClampNumber(Data.FocusAmount, LASER_CONFIG.FocusAmountDefault, LASER_CONFIG.FocusAmountMin, LASER_CONFIG.FocusAmountMax), 2) --
+    Data.FocusAmount = math.Round(ACFLazers.ClampNumber(Data.FocusAmount, LASER_CONFIG.FocusAmountDefault, LASER_CONFIG.FocusAmountMin, LASER_CONFIG.FocusAmountMax), 2)
 
     -- ColorSet is a 0/1 flag. Anything else (missing in an old dupe, junk from a console) becomes 0.
     Data.ColorSet = (tonumber(Data.ColorSet) or 0) >= 1 and 1 or 0
@@ -214,9 +237,9 @@ local function VerifyData(Data)
     local default = LASER_CONFIG.CustomColorDefault
 
     Data.UseCustomColor = (tonumber(Data.UseCustomColor) or 0) >= 1 and 1 or 0
-    Data.CustomR = math.Round(ACFLazers.ClampNumber(Data.CustomR, default[1], 0, 255)) --
-    Data.CustomG = math.Round(ACFLazers.ClampNumber(Data.CustomG, default[2], 0, 255)) --
-    Data.CustomB = math.Round(ACFLazers.ClampNumber(Data.CustomB, default[3], 0, 255)) --
+    Data.CustomR = math.Round(ACFLazers.ClampNumber(Data.CustomR, default[1], 0, 255))
+    Data.CustomG = math.Round(ACFLazers.ClampNumber(Data.CustomG, default[2], 0, 255))
+    Data.CustomB = math.Round(ACFLazers.ClampNumber(Data.CustomB, default[3], 0, 255))
 
     -- The burst length / recharge time checks were here and are gone (an old tool or dupe may still send them; they are ignored).
 end
@@ -314,6 +337,10 @@ function ENT:UpdateWireOutputs()
     WireLib.TriggerOutput(self, "PowerDraw", ACFLazers.GetDrawRate(self:GetCaliber()))
     WireLib.TriggerOutput(self, "Energy", self.LastEnergy or 0)
     WireLib.TriggerOutput(self, "NoPower", self.NoPower and 1 or 0)
+    WireLib.TriggerOutput(self, "HeatKJ", Heat.GetKJ(self)) -- [CHANGED 3]
+    WireLib.TriggerOutput(self, "HeatF", Heat.GetTempF(self))
+    WireLib.TriggerOutput(self, "HeatPct", self:GetHeatPct() * 100)
+    WireLib.TriggerOutput(self, "Cooling", self.HeatCooling and 1 or 0)
 
     self.LastWobbleMOA = ACFLazers.GetWobbleCone(self:GetCaliber(), self:GetHealthFraction()) * 60 -- degrees -> MOA
     WireLib.TriggerOutput(self, "Wobble", self.LastWobbleMOA)
@@ -368,8 +395,104 @@ function ENT:SetFiringState(state)
         end
     end
 
+    if not state then self:HeatEvaluate() end -- [CHANGED 5] a lazer that stops while marked overheated is cooling from now on
+
     self:UpdateWireOutputs()
-    self:UpdateOverlay() -- the hover text says Firing / Ready / Cannot fire
+    self:UpdateOverlay() -- the hover text says Firing / Ready / Cooling / Cannot fire
+end
+
+-- =====================  LAZER HEAT  =====================
+-- The lazer heats ITSELF while it fires (Think adds the heat it makes each tick). When its heat reaches HeatLockStartPct of its limit it is marked "overheated": the beam keeps
+-- going for as long as Fire is held, but once the lazer stops it is COOLING ("unavailable") until its heat is down to the lock-end percent. Above 100% of its limit it damages
+-- itself, and if that kills it, it may explode. The heat itself is kept by lua/autorun/acf_lazers_heat.lua; every number is in the config (everything starting with Heat...). [CHANGED 3]
+
+-- How hot the lazer is as a fraction of its limit (HeatLazerCapF): 0 = room temperature, 1 = the limit, 2 = twice as far above room temperature as the limit.
+function ENT:GetHeatPct()
+    return Heat.GetPct(self, ACFLazers.GetHeatRiseLazer())
+end
+
+-- kJ of heat per second this lazer makes while it fires: its draw x the lazer scalar (HeatLazerSmall .. HeatLazerBig). Its beam heats props with the same rate (x HeatHitSmall .. HeatHitBig).
+function ENT:GetHeatRate()
+    return self:GetDrawRate() * ACFLazers.GetLazerHeatScalar(self:GetCaliber())
+end
+
+-- Can the lazer start (or restart after running dry) right now? Not while it is cooling, and only when the capacitors hold the start energy (HasStartEnergy).
+function ENT:CanStart()
+    return not self.HeatCooling and self:HasStartEnergy()
+end
+
+-- Works out the two heat states. Returns true if either of them changed.
+--   HeatHot     = marked overheated. Set when the heat reaches HeatLockStartPct. Cleared when the heat is back down to the lock-end percent.
+--   HeatCooling = unavailable. Set when a marked lazer is not firing. Cleared at the lock-end percent.
+-- A lazer that stops BELOW HeatLockStartPct was never marked, so it is never cooling and can fire again at once.
+function ENT:HeatEvaluate()
+    local pct                = self:GetHeatPct()
+    local lockEnd            = ACFLazers.GetLazerLockEndPct(self:GetCaliber()) / 100
+    local wasHot, wasCooling = self.HeatHot, self.HeatCooling
+
+    if pct >= LASER_CONFIG.HeatLockStartPct / 100 then self.HeatHot = true end
+    if self.HeatHot and not self.Firing then self.HeatCooling = true end
+
+    if pct <= lockEnd then
+        self.HeatHot     = false
+        self.HeatCooling = false
+    end
+
+    return wasHot ~= self.HeatHot or wasCooling ~= self.HeatCooling
+end
+
+-- Called from Think every tick; does its work every HeatCheckInterval seconds: the two states, and the damage a lazer over its limit does to itself.
+function ENT:HeatThink(now)
+    if now < self.NextHeatCheck then return end
+
+    local dt = math.Clamp(now - self.LastHeatCheck, 0, LASER_CONFIG.HeatMaxDeltaTime) -- the cap: a lag spike must not become one huge burst of damage
+
+    self.LastHeatCheck = now
+    self.NextHeatCheck = now + LASER_CONFIG.HeatCheckInterval
+
+    if self:HeatEvaluate() then self:RefreshPower(true) end
+
+    local over = self:GetHeatPct() - 1
+
+    if over > 0 then self:TakeHeatDamage(over, dt) end
+end
+
+-- `over` = how far above its limit it is (0.5 = at 150%). Damage per second = HeatLazerDamage percent of max health x over^2. It goes through ACF's own damage pipeline
+-- (Heat.Hurt), so ACF's hooks and permission rules apply as for any hit. A lazer has no damage handler of its own, so the kill is carried out here (HeatDeath).
+function ENT:TakeHeatDamage(over, dt)
+    local acf = self.ACF
+
+    if not (acf and acf.MaxHealth and acf.MaxHealth > 0) then return end
+
+    local pctPerSecond = ACFLazers.GetHeatDamagePct(over, LASER_CONFIG.HeatLazerDamage)
+    local HitRes       = Heat.Hurt(self, acf.MaxHealth * pctPerSecond / 100 * dt)
+
+    if HitRes and HitRes.Kill then self:HeatDeath() end
+end
+
+-- Killed by its own heat. While FIRING, with the chance HeatExplodeChance, it explodes like a capacitor does: HeatExplodeKJMult x its draw (kJ) becomes HE filler (kJ / ACF.HEPower,
+-- so not literal kilograms). Otherwise it simply dies, like a prop killed by a bullet.
+function ENT:HeatDeath()
+    if self.HeatDying then return end
+
+    self.HeatDying = true
+
+    local dmgInfo = Objects.DamageInfo(self:GetAttacker(), self)
+
+    if self.Firing and math.random() < LASER_CONFIG.HeatExplodeChance then
+        local filler   = ACFLazers.GetLazerExplosionFiller(self:GetCaliber())
+        local position = self:LocalToWorld(self:OBBCenter())
+
+        ACF.KillChildProps(self, position, filler)
+
+        Damage.createExplosion(position, filler, filler * 0.5, { self }, dmgInfo)
+        Damage.explosionEffect(position, nil, filler)
+
+        constraint.RemoveAll(self)
+        self:Remove()
+    else
+        ACF.APKill(self, VectorRand(), math.min(LASER_CONFIG.HeatDeathDebrisPower, LASER_CONFIG.MaxDebrisPower), dmgInfo)
+    end
 end
 
 -- =====================  LAZER POWER  =====================
@@ -473,7 +596,7 @@ end
 -- seconds while the lazer is in use, once a second when idle; force = do it now).
 function ENT:RefreshPower(force)
     local now     = CurTime()
-    local noPower = (self.WantFire and not self.Firing) and true or false
+    local noPower = (self.WantFire and not self.Firing and not self.HeatCooling) and true or false -- [CHANGED 5] a lazer that is cooling is not out of power
 
     if noPower ~= self.NoPower then
         self.NoPower = noPower
@@ -499,7 +622,7 @@ function ENT:TriggerInput(iname, value)
 
         if not self.WantFire then
             self:SetFiringState(false)
-        elseif not self.Firing and self:HasStartEnergy() then
+        elseif not self.Firing and self:CanStart() then -- [CHANGED 5] CanStart = not cooling AND the pool can pay for a start
             self:SetFiringState(true)
         end
 
@@ -522,15 +645,20 @@ function ENT:Think()
             if dt > 0 then
                 -- Pay for this tick's bite (draw rate x dt) first. If the pool cannot, the lazer cuts out: a "dud" until the pool can start it again.
                 if self:TakeEnergy(self:GetDrawRate() * dt) then
+                    Heat.Add(self, self:GetHeatRate() * dt) -- [CHANGED 4] the paid bite also heats the lazer itself
                     self:FireLaserBeam(dt)
                 else
                     self:SetFiringState(false)
                 end
             end
-        elseif self:HasStartEnergy() then
-            self:SetFiringState(true) -- Fire is still held and the pool has recovered: carry on by itself
+        elseif self:CanStart() then -- [CHANGED 5]
+            self:SetFiringState(true) -- Fire is still held, the lazer has cooled (if it had to) and the pool has recovered: carry on by itself
         end
     end
+
+    self:HeatThink(now) -- [CHANGED 4]
+
+    if not IsValid(self) then return end -- [CHANGED 4] its own heat can destroy it
 
     self:RefreshPower(false)
 
@@ -943,6 +1071,12 @@ function ENT:DamageProp(target, tr, dir, dt, focal, doEffects, beam)
     -- 0 damage is normal there and nothing is reported.
     local accepted = damageOk and (killed == true or (HitRes.Damage or 0) > 0)
 
+    -- [CHANGED 7] A hit ACF accepted heats the prop: the lazer's heat rate x HeatHitSmall .. HeatHitBig, weakened exactly like the damage is (focus x falloff, angle, burn-through).
+    -- (The small-lazer damage boost is NOT in it: that is a damage balance knob, not energy.)
+    if accepted then
+        Heat.Add(target, self:GetHeatRate() * ACFLazers.GetLazerHitHeatMult(caliber) * dt * focal * spread * beam.scale)
+    end
+
     if damageOk and not accepted and area > 0 then
         self:Notify("refused", "ACF took the hit on " .. Describe(target) .. " but dealt it no damage, so there is no damage and no fire. " .. self:ExplainRefusal(target, DmgInfo))
     end
@@ -993,8 +1127,15 @@ function ENT:DamageProp(target, tr, dir, dt, focal, doEffects, beam)
     elseif not beam.penetrated and target.ACF and target.ACF.Armour then
         local threshold  = ACFLazers.GetPassLine(caliber, focal) -- "the line", in mm of armour. focal = this hit's damage multiplier (focal curve x falloff): the line follows the damage
         local armourNow  = target.ACF.Armour
+        -- [CHANGED 7] One more condition: the plate must be HOT (HeatPenGate in the config; the heat of THIS tick's hit is already in). A cold plate stops the beam however thin it is.
+        local hotEnough  = (not LASER_CONFIG.HeatPenGate) or Heat.IsHot(target)
 
-        if armourNow < threshold then
+        if armourNow < threshold and not hotEnough then
+            self:DebugSay("cold", string.format("beam NOT burning through %s: armour %.1f mm is under the line (%.1f mm) but the plate is only at %.0f%% of HOT (%.0f F needed)",
+                tostring(target), armourNow, threshold, Heat.GetPctHot(target) * 100, LASER_CONFIG.HeatHotF))
+        end
+
+        if armourNow < threshold and hotEnough then
             -- How far below the line, as a share of the whole slide (0 = right on the line, 1 = at or past PenRampEnd x the line).
             -- math.max(..., 0.001) only protects against a mistyped PenRampEnd of 1 or more (that would divide by zero).
             local slide      = threshold * math.max(1 - LASER_CONFIG.PenRampEnd, 0.001)
@@ -1070,7 +1211,7 @@ function ENT:FireLaserBeam(dt)
     local cone      = self:UpdateWobble()       -- pick this tick's aim error first (it is published to clients too)...
     local dir       = self:GetBeamDirection()   -- ...then trace along it (shared.lua). Healthy lazer = exactly GetForward().
     local filter    = { self }
-    local mask      = ACFLazers.GetBeamMask(self:GetCaliber()) -- [CHANGED 2] ACF's own bullet mask for this caliber (config), decided once per tick
+    local mask      = ACFLazers.GetBeamMask(self:GetCaliber()) -- ACF's own bullet mask for this caliber (config), decided once per tick
     local from      = startPos
     local remaining = self.BeamRange -- how far this lazer's beam really reaches (damage is 0 at the end)
 
@@ -1099,7 +1240,7 @@ function ENT:FireLaserBeam(dt)
         end
 
         -- ACF.trace (acf/core/utilities/traces_sh.lua:73) = util.TraceLine that also skips clipped-away parts of props.
-        -- [CHANGED 2] The mask is no longer MASK_SHOT: it is what an ACF bullet of this caliber uses (see the knob BeamMaskSmallBelowMM in the config).
+        -- The mask is no longer MASK_SHOT: it is what an ACF bullet of this caliber uses (see the knob BeamMaskSmallBelowMM in the config).
         local tr = ACF.trace({
             start  = from,
             endpos = from + dir * remaining,
@@ -1180,7 +1321,9 @@ function ENT:ACF_UpdateOverlayState(State)
     local caliber = self:GetCaliber()
     local needs   = LASER_CONFIG.RequireCapacitor
 
-    if self.Firing then
+    if self.HeatCooling then -- [CHANGED 5]
+        State:AddError(string.format("Cooling: unavailable until %.0f%% heat", ACFLazers.GetLazerLockEndPct(caliber)))
+    elseif self.Firing then
         State:AddSuccess("Firing")
     elseif self:HasStartEnergy() then
         State:AddSuccess("Ready to fire")
@@ -1198,6 +1341,17 @@ function ENT:ACF_UpdateOverlayState(State)
     end
 
     State:AddKeyValue("Caliber", string.format("%g mm", caliber))
+
+    -- [CHANGED 6] the heat, in Fahrenheit, and as a share of the lazer's limit
+    local heatPct = self:GetHeatPct()
+
+    State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of its limit)", Heat.GetTempF(self), heatPct * 100))
+
+    if heatPct > 1 then
+        State:AddError("Overheated: taking damage")
+    elseif self.HeatHot and not self.HeatCooling then
+        State:AddWarning("Overheated: will have to cool down once it stops")
+    end
 
     if needs then
         local capacity = self:GetPoolCapacity()
@@ -1236,7 +1390,7 @@ function ENT:OnRemove()
 
     ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1
 
-    self:StopBeamSounds() --
+    self:StopBeamSounds()
 end
 
 -- NEW: click-to-update. Entities.Update (acf/core/classes/entities/registration.lua:1170) calls this.
@@ -1300,7 +1454,7 @@ if SERVER then
     -- NOTE: if "Caliber" is ever renamed, old dupes will paste at the default size.
     -- Old dupes without a newer name paste with its default (ColorSet 0, default FocusAmount; an old FocalRange is ignored). Old dupes that still carry BurstTime / RechargeTime ignore them.
     -- The custom colour names (UseCustomColor, CustomR / G / B / A) are plain fields too; an old dupe without them pastes on the palettes.
-    Entities.Register("acf_lazer", MakeACFLazer, "Caliber", "Focal", "FocusAmount", "ColorSet", "UseCustomColor", "CustomR", "CustomG", "CustomB") --
+    Entities.Register("acf_lazer", MakeACFLazer, "Caliber", "Focal", "FocusAmount", "ColorSet", "UseCustomColor", "CustomR", "CustomG", "CustomB")
 
     -- LINKING lazer <-> capacitor, through ACF's own link system (the same one guns and ammo crates use).
     -- The capacitor tool calls  lazer:Link(capacitor)  and  lazer:Unlink(capacitor);  ACF finds these two functions by the entity classes, in either order.

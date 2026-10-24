@@ -1,24 +1,30 @@
 -- =========================================================================
--- CHANGES vs the capacitor init.lua you have now (version 9.7). Search this file for [CHANGED n].
---   1  The version line says 12
---   2  GENERATOR HUBS can be linked to a capacitor (the new acf_generator entity pours energy into the capacitor group). New set self.Generators; it is filled and emptied by the
---      generator <-> capacitor link functions in the GENERATOR's init.lua. Here: the set itself, the link-source registration (E2/Starfall can see it), UnlinkAll and OnRemove
---      also let go of generators, and the hover text counts them. No new wire inputs / outputs. AllowCharge off still refuses everything that would charge it, generators included
---      (the generator looks at cap.Allowing, generator init.lua GetRoom)
---   3  New ENT:IsChargeAllowed(): AllowCharge read straight from the wire (the `Allowing` mirror is refreshed only in Think, up to CapThinkInterval late). Think uses it, and the generator hub uses it
---      so a capacitor whose AllowCharge was just switched off never gets another kJ from a generator
---   (The 9.x numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
---   Goes to:  lua/entities/acf_capacitor/init.lua
+-- ACF CAPACITOR: SERVER FILE
+-- Goes to:  lua/entities/acf_capacitor/init.lua
+--           NEEDS the new config (lua/autorun/acf_lazers_config.lua) AND the new file lua/autorun/acf_lazers_heat.lua: it refuses to load without them
 --
+-- CHANGES vs the capacitor init.lua you have now (version 12). Search this file for [CHANGED n].
+--   1  The version line says 15
+--   2  A LOAD-TIME CHECK for the heat system (ACFLazers.Heat, from acf_lazers_heat.lua). Missing = one clear console error and the capacitor does not load
+--   3  THE CAPACITOR HEATS when energy moves: AddCharge and RemoveCharge add (kJ moved x the capacitor scalar) of heat, each way. That covers its own charging, lazers drawing,
+--      generators pouring in and dumps (the dumping side loses energy, the receiving side gains it: both heat)
+--   4  OVER ITS CRITICAL HEAT it damages itself: HeatThink in Think, damage per second = HeatCapDamage percent of max health x (how far over)^2, through ACF's damage pipeline. A kill
+--      detonates it like any destroyed capacitor; a damaged one also rolls its usual explosion dice
+--   5  New wire outputs HeatKJ, HeatF, HeatPct (percent of the CRITICAL heat), the temperature line on the hover text, and the hover text refreshes as the heat moves
+--   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
+-- =========================================================================
+
 -- THE ACF CAPACITOR. Stores energy in kJ (the same unit as ACF's HE: ACF.HEPower = 8000 kJ per kg of filler).
 --   * size: a diameter in units (config CapDiameterMin..Max); capacity grows with the physical volume (config CapEnergyPerVolume)
 --   * fills by itself at the "charge rate" setting (kJ per second, never more than a third of the capacity per second). NOT while a lazer is drawing from it.
 --     Generator hubs (acf_generator) also charge it, as fast as the engines behind them can deliver
 --   * lazers draw energy from it (lazer init.lua: TakeEnergy); capacitors linked to each other form one group that shares the load
---   * wire:  inputs AllowCharge, Dump (kJ per second)   outputs Charge, Capacity, Percent, ChargeRate, RateSetting, Dumping, GroupCharge, GroupCapacity, Diameter
+--   * wire:  inputs AllowCharge, Dump (kJ per second)   outputs Charge, Capacity, Percent, ChargeRate, RateSetting, Dumping, GroupCharge, GroupCapacity, Diameter,
+--            HeatKJ, HeatF, HeatPct (percent of the critical heat)
 --     AllowCharge is the only switch: nothing wired = charging allowed; wired = follows the signal (above 0 = charging, 0 = no charging). It stops this capacitor's own
 --     charging, its intake of dumps and its intake from generators; lazers can still draw from it and it can still dump out
 --   * damage: may explode (more likely the fuller it is compared to its health); destroyed = always explodes, releasing 50-100% of what it stored
+--   * heat: warms when energy goes in or out (kJ moved x HeatCapSmall .. HeatCapBig); above its critical heat it damages itself, quadratically
 -- All numbers live in lua/autorun/acf_lazers_config.lua (everything starting with Cap...).
 -- =========================================================================
 
@@ -39,7 +45,15 @@ if not CFG then
     return
 end
 
-local VERSION = "12" -- [CHANGED 1]
+-- [CHANGED 2] The heat system lives in lua/autorun/acf_lazers_heat.lua (a new file in this batch) with its maths in the config.
+if not (ACFLazers.Heat and ACFLazers.Heat.Add and ACFLazers.GetHeatCapacity) then
+    ErrorNoHalt("[acf_capacitor] the heat system is missing: copy lua/autorun/acf_lazers_heat.lua (new) and the new lua/autorun/acf_lazers_config.lua, then restart.\n")
+    return
+end
+
+local Heat = ACFLazers.Heat
+
+local VERSION = "15" -- [CHANGED 1]
 MsgN("[acf_capacitor] init.lua version " .. VERSION .. " loaded")
 
 -- How many capacitors one player may own. GMod's own limit system reads a server variable called sbox_max<name>; CreateConVar does nothing if it already exists.
@@ -71,11 +85,11 @@ local function ReadWireNumber(self, name)
     return 0
 end
 
--- [CHANGED 3] Is charging allowed RIGHT NOW? Read straight from the wire, so it is never a moment late (the `Allowing` field below is only refreshed in Think).
+-- Is charging allowed RIGHT NOW? Read straight from the wire, so it is never a moment late (the `Allowing` field below is only refreshed in Think).
 -- Nothing wired = allowed; wired = the signal (above 0 = allowed). Generator hubs ask this before they pour energy in (generator init.lua GetRoom).
-function ENT:IsChargeAllowed() -- [CHANGED 3]
-    return ReadWireFlag(self, "AllowCharge", true) -- [CHANGED 3]
-end -- [CHANGED 3]
+function ENT:IsChargeAllowed()
+    return ReadWireFlag(self, "AllowCharge", true)
+end
 
 function ENT:TriggerInput(name, value)
     if name == "Dump" then self.WireDump = tonumber(value) or 0 end -- a number now, not a yes / no
@@ -90,7 +104,7 @@ function ENT:Initialize()
     self.ChargeRate     = 0                  -- kJ per second this capacitor fills itself (the tool slider)
     self.CapLinks       = {}                 -- capacitors linked to this one (a set: key = capacitor). Together they form a group
     self.Lazers         = {}                 -- lazers linked to this capacitor (a set)
-    self.Generators     = {}                 -- [CHANGED 2] generator hubs linked to this capacitor (a set; the generator's link function fills it, generator init.lua)
+    self.Generators     = {}                 -- generator hubs linked to this capacitor (a set; the generator's link function fills it, generator init.lua)
     self.Group          = { self }           -- the whole group (rebuilt when ACFLazers.LinkVersion changes)
     self.GroupVersion   = -1
     self.DumpRate       = 0                  -- kJ per second the Dump input asks for right now (0 = not dumping)
@@ -118,7 +132,10 @@ function ENT:Initialize()
             "Dumping",       -- 1 while the Dump input is on
             "GroupCharge",   -- kJ stored in this capacitor's whole group
             "GroupCapacity", -- kJ the whole group can hold
-            "Diameter"       -- size in units
+            "Diameter",      -- size in units
+            "HeatKJ",        -- [CHANGED 5] kJ of heat above room temperature
+            "HeatF",         -- [CHANGED 5] temperature in Fahrenheit
+            "HeatPct"        -- [CHANGED 5] percent of the CRITICAL heat (100 = critical, above = damaging itself)
         })
 
         if self.Inputs and self.Inputs.AllowCharge then self.Inputs.AllowCharge.Value = 1 end
@@ -205,6 +222,8 @@ function ENT:AddCharge(kJ)
 
     self.Charge = self.Charge + added
 
+    if added > 0 then Heat.Add(self, added * ACFLazers.GetCapHeatScalar(self.Diameter)) end -- [CHANGED 3]
+
     return added
 end
 
@@ -213,6 +232,8 @@ function ENT:RemoveCharge(kJ)
     local taken = math.Clamp(kJ, 0, self.Charge)
 
     self.Charge = self.Charge - taken
+
+    if taken > 0 then Heat.Add(self, taken * ACFLazers.GetCapHeatScalar(self.Diameter)) end -- [CHANGED 3]
 
     return taken
 end
@@ -273,6 +294,29 @@ function ENT:DumpStep(dt, rate)
     self:RemoveCharge(moved)
 end
 
+-- ===================== HEAT =====================
+-- Heat is kept by lua/autorun/acf_lazers_heat.lua; AddCharge / RemoveCharge above put it in. The capacitor's CRITICAL heat is HeatCapCritFrac of the HOT excess (config).
+-- [CHANGED 4]
+
+-- How hot as a fraction of the critical heat: 0 = room temperature, 1 = critical, 2 = twice as far above room temperature as the critical heat.
+function ENT:GetHeatPct()
+    return Heat.GetPct(self, ACFLazers.GetHeatRiseCap())
+end
+
+-- Over the critical heat the capacitor hurts itself: HeatCapDamage percent of its max health per second at twice the critical heat, growing with the square of how far over it is.
+-- It goes through ACF's damage pipeline (Heat.Hurt): a kill reaches ENT:ACF_OnDamage below and detonates it; a hit that does not kill may roll the usual explosion dice there.
+function ENT:HeatThink(dt)
+    local over = self:GetHeatPct() - 1
+
+    if over <= 0 or self.Exploding then return end
+
+    local acf = self.ACF
+
+    if not (acf and acf.MaxHealth and acf.MaxHealth > 0) then return end
+
+    Heat.Hurt(self, acf.MaxHealth * ACFLazers.GetHeatDamagePct(over, CFG.HeatCapDamage) / 100 * dt)
+end
+
 -- ===================== WIRE + OVERLAY =====================
 
 function ENT:UpdateWireOutputs()
@@ -296,6 +340,9 @@ function ENT:UpdateWireOutputs()
     WireLib.TriggerOutput(self, "GroupCharge", groupCharge)
     WireLib.TriggerOutput(self, "GroupCapacity", groupCapacity)
     WireLib.TriggerOutput(self, "Diameter", self.Diameter)
+    WireLib.TriggerOutput(self, "HeatKJ", Heat.GetKJ(self)) -- [CHANGED 5]
+    WireLib.TriggerOutput(self, "HeatF", Heat.GetTempF(self))
+    WireLib.TriggerOutput(self, "HeatPct", self:GetHeatPct() * 100)
 end
 
 -- The hover text (ACF's overlay system calls this; ENT:UpdateOverlay() asks it to refresh).
@@ -320,13 +367,19 @@ function ENT:ACF_UpdateOverlayState(State)
     State:AddKeyValue("Net rate right now", string.format("%+.1f kJ/s", self.ApparentRate))
     State:AddKeyValue("Explosive content", string.format("%.2f kg of HE", self.Charge / ACF.HEPower * CFG.CapExplosionMult))
 
-    local linkedCaps, linkedLazers, linkedGens = 0, 0, 0 -- [CHANGED 2]
+    local heatPct = self:GetHeatPct() -- [CHANGED 5]
+
+    State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of its critical heat)", Heat.GetTempF(self), heatPct * 100))
+
+    if heatPct > 1 then State:AddError("Overheated: taking damage") end
+
+    local linkedCaps, linkedLazers, linkedGens = 0, 0, 0
 
     for _ in pairs(self.CapLinks) do linkedCaps = linkedCaps + 1 end
     for _ in pairs(self.Lazers) do linkedLazers = linkedLazers + 1 end
-    for _ in pairs(self.Generators) do linkedGens = linkedGens + 1 end -- [CHANGED 2]
+    for _ in pairs(self.Generators) do linkedGens = linkedGens + 1 end
 
-    State:AddKeyValue("Linked", string.format("%d capacitor(s), %d lazer(s), %d generator(s)", linkedCaps, linkedLazers, linkedGens)) -- [CHANGED 2]
+    State:AddKeyValue("Linked", string.format("%d capacitor(s), %d lazer(s), %d generator(s)", linkedCaps, linkedLazers, linkedGens))
 
     if linkedCaps > 0 then
         local groupCharge, groupCapacity = 0, 0
@@ -345,6 +398,7 @@ end
 -- Refresh the hover text, but only when something worth showing changed (every half a percent of charge, or a switch flipped): ACF's overlay networks changes.
 function ENT:RefreshOverlay()
     local signature = math.floor(self:GetChargeFraction() * 200) .. (self.Dumping and ("d" .. math.floor(self.DumpRate)) or "") .. (self.Allowing and "" or "b") .. (self.Drained and "x" or "")
+        .. "h" .. math.floor(self:GetHeatPct() * 20) -- [CHANGED 5] the heat in steps of 5% of the critical heat
 
     if signature ~= self.OverlaySig then
         self.OverlaySig = signature
@@ -360,7 +414,7 @@ function ENT:Think()
 
     self.LastThink = now
 
-    local allow    = self:IsChargeAllowed() -- [CHANGED 3] nothing wired = on; wired = the signal (above 0 = on)
+    local allow    = self:IsChargeAllowed() -- nothing wired = on; wired = the signal (above 0 = on)
     local dumpRate = math.max(ReadWireNumber(self, "Dump"), 0) -- kJ per second the Dump input asks for
     local dump     = dumpRate > 0
     local rate     = self.ChargeRate
@@ -389,6 +443,8 @@ function ENT:Think()
         self:UpdateWireOutputs()
         self:RefreshOverlay()
     end
+
+    self:HeatThink(dt) -- [CHANGED 4]
 
     self:NextThink(now + CFG.CapThinkInterval)
 
@@ -464,7 +520,7 @@ end
 
 ACF.RegisterLinkSource("acf_capacitor", "CapLinks")
 ACF.RegisterLinkSource("acf_capacitor", "Lazers")
-ACF.RegisterLinkSource("acf_capacitor", "Generators") -- [CHANGED 2] (the generator <-> capacitor link itself is registered in the generator's init.lua)
+ACF.RegisterLinkSource("acf_capacitor", "Generators") -- (the generator <-> capacitor link itself is registered in the generator's init.lua)
 
 ACF.RegisterClassLink("acf_capacitor", "acf_capacitor", function(A, B)
     if A.CapLinks[B] or B.CapLinks[A] then return false, "These capacitors are already linked." end
@@ -506,9 +562,9 @@ function ENT:UnlinkAll()
         if ACF.PerformClassUnlink(lazer, self) then count = count + 1 end
     end
 
-    for gen in pairs(self.Generators) do -- [CHANGED 2]
-        if ACF.PerformClassUnlink(gen, self) then count = count + 1 end -- [CHANGED 2]
-    end -- [CHANGED 2]
+    for gen in pairs(self.Generators) do
+        if ACF.PerformClassUnlink(gen, self) then count = count + 1 end
+    end
 
     return count
 end
@@ -523,9 +579,9 @@ function ENT:OnRemove()
         if IsValid(lazer) and lazer.Caps then lazer.Caps[self] = nil end
     end
 
-    for gen in pairs(self.Generators) do -- [CHANGED 2]
-        if IsValid(gen) and gen.Caps then gen.Caps[self] = nil end -- [CHANGED 2]
-    end -- [CHANGED 2]
+    for gen in pairs(self.Generators) do
+        if IsValid(gen) and gen.Caps then gen.Caps[self] = nil end
+    end
 
     ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1
 end
