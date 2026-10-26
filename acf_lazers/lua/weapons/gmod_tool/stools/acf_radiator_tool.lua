@@ -1,9 +1,9 @@
 -- =========================================================================
--- NEW (15.2). Goes to:  lua/weapons/gmod_tool/stools/acf_radiator_tool.lua
+-- NEW (15.2), CHANGED (15.3). Goes to:  lua/weapons/gmod_tool/stools/acf_radiator_tool.lua
 --
 -- THE RADIATOR TOOL (based on the generator tool).
---   Left-click        spawn a radiator with the slider's width, or update the radiator you are aiming at. The width sets the model scale, the mass, the radius it reaches and how much
---                     heat it can take out per second (RadWidthMin..RadWidthMax and the Rad... knobs in the config)
+--   Left-click        spawn a radiator with the slider's width and the colour of the coolant (the colour picker), or update the radiator you are aiming at. The width sets the model scale,
+--                     the mass, the radius it reaches, how much heat it can take out per second and the size of its coolant tank (RadWidthMin..RadWidthMax and the Rad... knobs in the config)
 --   Right-click       LINK (from the link kit, lua/autorun/acf_lazers_linkkit.lua). Click the first thing: it turns green. Then click what to link it to. Radiators linked to each
 --                     other are ONE POOL: one member list, the sum of their sap rates.
 --   Shift + right-click   add one more thing to the selection, or take a selected thing off it. Then a plain right-click links ALL selected things to the one you aim at.
@@ -12,6 +12,7 @@
 -- While the toolgun is out (any tool) and you aim at a radiator, the sphere of its radius is drawn around it (the radiator's cl_init.lua).
 -- While THIS tool is out, look at any part within RadReadoutDistance units: its temperature is shown next to the crosshair (plain props have no hover text of their own).
 -- All the numbers on the screen come from ACFLazers.GetRadReadout in the config, so the tool cannot disagree with the radiator.
+-- (15.3) The coolant colour is the colour of the steam a radiator vents when its Flush wire input is on. The readout also shows the size of the tank and how fast a flush empties it.
 -- =========================================================================
 
 TOOL.Category = "ACF - LaZers"
@@ -21,10 +22,20 @@ TOOL.Name = "Radiator Spawner"
 local Config = ACFLazers and ACFLazers.Config
 assert(Config, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is missing or did not load")
 assert(ACFLazers.LinkKit, "[acf_radiator_tool] lua/autorun/acf_lazers_linkkit.lua is missing or did not load")
-assert(ACFLazers.GetRadReadout, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator helpers). Copy the config of the same batch (15.2).")
+assert(ACFLazers.GetRadReadout, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator helpers). Copy the config of the same batch (15.3).")
+assert(ACFLazers.GetRadCoolantCapacity, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no coolant helpers). Copy the config of the same batch (15.3).")
 
 TOOL.ClientConVar["width"]   = Config.RadWidthDefault
 TOOL.ClientConVar["celsius"] = 0
+
+-- [CHANGED 1] the colour of the coolant (the steam of a flush): the config's default until the player picks another
+do
+    local r, g, b = ACFLazers.ClampRadColor(nil, nil, nil)
+
+    TOOL.ClientConVar["coolantr"] = r
+    TOOL.ClientConVar["coolantg"] = g
+    TOOL.ClientConVar["coolantb"] = b
+end
 
 -- Right-click (select / link), Shift + right-click, Reload (unlink), Holster, and the little help lines at the bottom-left of the screen.
 ACFLazers.LinkKit.Install(TOOL, "acf_radiator_tool", "Spawn a radiator this wide, or update the one you are aiming at")
@@ -57,6 +68,15 @@ if CLIENT then
         if digits:sub(1, 1) == "," then digits = digits:sub(2) end
 
         return sign .. digits
+    end
+
+    -- The colour picked for the coolant (read from the ConVars every time: three numbers, cheap).
+    local function CoolantColor()
+        local r, g, b = ACFLazers.ClampRadColor(GetConVar("acf_radiator_tool_coolantr") and GetConVar("acf_radiator_tool_coolantr"):GetInt(),
+                                                GetConVar("acf_radiator_tool_coolantg") and GetConVar("acf_radiator_tool_coolantg"):GetInt(),
+                                                GetConVar("acf_radiator_tool_coolantb") and GetConVar("acf_radiator_tool_coolantb"):GetInt())
+
+        return Color(r, g, b)
     end
 
     -- Only works the numbers out again when the slider moved (the screen is drawn every frame).
@@ -116,7 +136,20 @@ if CLIENT then
             _, lh = draw.SimpleText(string.format("it survives x%g (the most)", Config.RadOverclockMax), "ACFLazersRadSmall", cx, y, ColGrey, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
         end
 
-        return y + lh
+        y = y + lh + 1
+
+        if show.liters and show.liters > 0 then
+            -- [CHANGED 1] the tank, in the colour of its steam
+            local tank = show.liters >= 10 and string.format("coolant tank %d L", math.floor(show.liters + 0.5)) or string.format("coolant tank %.1f L", show.liters)
+
+            _, lh = draw.SimpleText(tank, "ACFLazersRadSmall", cx, y, CoolantColor(), TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
+            y = y + lh + 1
+
+            _, lh = draw.SimpleText(string.format("flush: %.1f L/s, %s kJ/s extra", show.flushRate, Commas(show.flushKJ)), "ACFLazersRadSmall", cx, y, ColGrey, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
+            y = y + lh
+        end
+
+        return y
     end
 
     -- The toolgun's own screen. [KNOW] TOOL:DrawToolScreen(width, height) is called every frame on the client while this tool is held; the screen is a square (256 x 256).
@@ -138,7 +171,7 @@ if CLIENT then
 
         local box = vgui.Create("DPanel")
 
-        box:SetTall(160)
+        box:SetTall(200)
 
         function box:Paint(w, h)
             draw.RoundedBox(8, 0, 0, w, h, ColBack)
@@ -146,6 +179,18 @@ if CLIENT then
         end
 
         panel:AddItem(box)
+
+        -- [CHANGED 1] [KNOW] the "Color" control is a colour mixer bound to three ConVars (Red / Green / Blue)
+        panel:AddControl("Color", {
+            Label     = "Coolant (steam) colour",
+            Red       = "acf_radiator_tool_coolantr",
+            Green     = "acf_radiator_tool_coolantg",
+            Blue      = "acf_radiator_tool_coolantb",
+            ShowAlpha = 0,
+            ShowHSV   = 1,
+            ShowRGB   = 1,
+            Multiplier = 255
+        })
 
         local info = panel:Help("")
 
@@ -161,8 +206,11 @@ if CLIENT then
 
                 info:SetText(string.format("A radiator %d units wide: model scale %.2f, mass %d kg, radius %d units. It takes up to %s kJ/s out of the hot parts of its own contraption that are inside its radius, "
                     .. "the hottest parts giving the most. Working makes waste heat (%.1f%% of the work it tries to do); from %d%% of HOT its efficiency falls to %d%% at 100%%, and over 100%% it damages itself. "
-                    .. "The Overclock wire input multiplies the rate (up to x%g). Where it settles:\n%s",
-                    show.width, show.scale, show.mass, math.floor(show.radius + 0.5), Commas(show.sap), show.wasteFrac * 100, Config.RadEffStartPct, Config.RadEffFloorPct, Config.RadOverclockMax, table.concat(lines, "\n")))
+                    .. "The Overclock wire input multiplies the rate (up to x%g). Where it settles:\n%s\n\n"
+                    .. "Coolant: the tank holds %.1f litres. A full tank is full strength, an empty one works at %d%%. The Flush wire input vents %.1f litres a second as a cloud of steam in the colour above "
+                    .. "and takes %s kJ/s of heat out of the hot parts on top. A supply crate refills the tank like a fuel tank.",
+                    show.width, show.scale, show.mass, math.floor(show.radius + 0.5), Commas(show.sap), show.wasteFrac * 100, Config.RadEffStartPct, Config.RadEffFloorPct, Config.RadOverclockMax, table.concat(lines, "\n"),
+                    show.liters, math.floor(ACFLazers.GetRadCoolantMult(0) * 100 + 0.5), show.flushRate, Commas(show.flushKJ)))
             end
         end
 
@@ -256,7 +304,10 @@ function TOOL:LeftClick(trace)
 
     -- The entity clamps this again server-side (VerifyData in the radiator's init.lua), so a stale ConVar is safe.
     local Data = {
-        Width = ply:GetInfoNum("acf_radiator_tool_width", Config.RadWidthDefault),
+        Width    = ply:GetInfoNum("acf_radiator_tool_width", Config.RadWidthDefault),
+        CoolantR = ply:GetInfoNum("acf_radiator_tool_coolantr", Config.RadCoolantColor[1]), -- [CHANGED 1] the entity clamps all three again (VerifyData)
+        CoolantG = ply:GetInfoNum("acf_radiator_tool_coolantg", Config.RadCoolantColor[2]),
+        CoolantB = ply:GetInfoNum("acf_radiator_tool_coolantb", Config.RadCoolantColor[3]),
     }
 
     -- Tell the player when the server will squeeze the width into the allowed range.

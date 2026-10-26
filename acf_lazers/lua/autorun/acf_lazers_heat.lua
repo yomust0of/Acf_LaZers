@@ -10,6 +10,7 @@
 --   * all the numbers are in the config (everything starting with Heat...). The maths helpers are in the config too (ACFLazers.HeatCool, GetHeatCapacity ...)
 -- Console commands:  acf_lazers_heat_info   (anyone: prints the heat of what you are looking at)     acf_lazers_heat_set <F>   (admins: sets it to that temperature, a test aid)
 -- 15.2 (search for [CHANGED 1]): the radiator tool asks this file for the temperature of the plain part you look at (two network messages, answered one entity at a time).
+-- 15.3 (search for [CHANGED 2]): hot lazers set players on fire (one timer, the box test is in the config), and the info command no longer talks about a lock-out (there is none).
 -- =========================================================================
 
 if not SERVER then return end
@@ -261,6 +262,103 @@ net.Receive("ACFLazers_HeatQuery", function(_, ply)
     net.Send(ply)
 end)
 
+-- ===================== HOT LAZERS SET PLAYERS ON FIRE ===================== [CHANGED 2]
+-- A lazer (any class in HeatIgniteClasses) that is HeatIgniteF or hotter sets on fire every player whose collision box touches the lazer's box. The fire is put out HeatIgniteLinger seconds
+-- after the last touch of a hot lazer. ONE timer works everything every HeatIgniteInterval seconds, and it only looks at the lazers in the heat registry (nothing that is cold is ever
+-- looked at). We only put out a fire WE lit: a player who was already burning (from anything else) is never lit again and never put out by us.
+-- Veto hook:  hook.Add("ACFLazers_CanIgnite", "name", function(ply, lazer) return false end)  = that player is not set on fire by that lazer (for safe zones and the like).
+
+Heat.Burning = Heat.Burning or setmetatable({}, { __mode = "k" }) -- player -> CurTime() of the last touch of a hot lazer, for the players WE set on fire
+
+--- The oriented box of an entity as the pure maths wants it: centre, three unit axes, three half sizes (grown by `reach` units on every side).
+function Heat.GetBox(ent, reach)
+    local origin = ent:GetPos()
+    local mins   = ent:OBBMins()
+    local maxs   = ent:OBBMaxs()
+    local centre = ent:LocalToWorld((mins + maxs) * 0.5)
+    local axes   = {}
+
+    -- the local x, y, z axes in world space (taken from LocalToWorld so there is no doubt about which way "right" points)
+    for i, dir in ipairs({ Vector(1, 0, 0), Vector(0, 1, 0), Vector(0, 0, 1) }) do
+        local axis = ent:LocalToWorld(dir) - origin
+
+        axes[i] = { x = axis.x, y = axis.y, z = axis.z }
+    end
+
+    reach = math.max(tonumber(reach) or 0, 0)
+
+    return { x = centre.x, y = centre.y, z = centre.z }, axes, {
+        (maxs.x - mins.x) * 0.5 + reach,
+        (maxs.y - mins.y) * 0.5 + reach,
+        (maxs.z - mins.z) * 0.5 + reach,
+    }
+end
+
+--- Does the player's collision box (the box that stops you walking through things, so it follows ducking) touch this oriented box? `box` = { centre, axes, half sizes } from Heat.GetBox.
+function Heat.TouchesPlayer(box, ply)
+    local pos  = ply:GetPos()
+    local mins = ply:OBBMins()
+    local maxs = ply:OBBMaxs()
+    local c    = pos + (mins + maxs) * 0.5
+
+    return ACFLazers.ObbTouchesAabb(box[1], box[2], box[3], c, { x = (maxs.x - mins.x) * 0.5, y = (maxs.y - mins.y) * 0.5, z = (maxs.z - mins.z) * 0.5 })
+end
+
+--- One check of everything. Safe to call as often as you like.
+function Heat.IgniteSweep()
+    local now     = CurTime()
+    local classes = CFG.HeatIgniteClasses
+    local limit   = tonumber(CFG.HeatIgniteF) or 500
+    local linger  = math.max(tonumber(CFG.HeatIgniteLinger) or 0, 0)
+    local life    = math.max(tonumber(CFG.HeatIgniteLife) or 5, 0.1)
+    local boxes    -- the hot lazers: { box = { centre, axes, half sizes }, lazer = the entity } (stays nil when nothing is hot, and then no player is looked at unless one of ours is still burning)
+
+    if type(classes) == "table" then
+        for ent in pairs(Heat.Registry) do
+            if IsValid(ent) and classes[ent:GetClass()] and Heat.GetTempF(ent) >= limit then
+                local centre, axes, half = Heat.GetBox(ent, CFG.HeatIgniteReach) -- (three values: they must not be squeezed into a table constructor next to another one)
+
+                boxes = boxes or {}
+                boxes[#boxes + 1] = { box = { centre, axes, half }, lazer = ent }
+            end
+        end
+    end
+
+    if not boxes and not next(Heat.Burning) then return end
+
+    for _, ply in ipairs(player.GetAll()) do
+        local touching = false
+
+        if boxes and IsValid(ply) and ply:Alive() then
+            for _, entry in ipairs(boxes) do
+                if Heat.TouchesPlayer(entry.box, ply) and hook.Run("ACFLazers_CanIgnite", ply, entry.lazer) ~= false then
+                    touching = true
+
+                    break
+                end
+            end
+        end
+
+        if touching then
+            if Heat.Burning[ply] then
+                Heat.Burning[ply] = now -- ours, and still touching: the clock starts again
+
+                if not ply:IsOnFire() then ply:Ignite(life) end -- (water or the fire's own end put it out: light it again)
+            elseif not ply:IsOnFire() then
+                ply:Ignite(life)
+
+                Heat.Burning[ply] = now
+            end
+        elseif Heat.Burning[ply] and (not IsValid(ply) or not ply:Alive() or now - Heat.Burning[ply] >= linger) then
+            if IsValid(ply) and ply:Alive() then ply:Extinguish() end
+
+            Heat.Burning[ply] = nil
+        end
+    end
+end
+
+timer.Create("ACFLazers_IgniteSweep", math.max(tonumber(CFG.HeatIgniteInterval) or 0.1, 0.02), 0, function() Heat.IgniteSweep() end)
+
 -- ===================== CONSOLE COMMANDS =====================
 
 local function Say(ply, text)
@@ -302,7 +400,7 @@ concommand.Add("acf_lazers_heat_info", function(ply)
 
     if ent:GetClass() == "acf_lazer" then
         parts[#parts + 1] = string.format("%.0f%% of its lazer limit (%.0f F)", Heat.GetPct(ent, ACFLazers.GetHeatRiseLazer()) * 100, CFG.HeatLazerCapF)
-        parts[#parts + 1] = ent.HeatCooling and "COOLING (unavailable)" or (ent.HeatHot and "marked overheated" or "not marked")
+        parts[#parts + 1] = Heat.GetTempF(ent) >= CFG.HeatIgniteF and ("sets players that touch it on fire (" .. CFG.HeatIgniteF .. " F and up)") or "does not set anybody on fire"
     elseif ent:GetClass() == "acf_capacitor" then
         parts[#parts + 1] = string.format("%.0f%% of its critical heat", Heat.GetPct(ent, ACFLazers.GetHeatRiseCap()) * 100)
     end

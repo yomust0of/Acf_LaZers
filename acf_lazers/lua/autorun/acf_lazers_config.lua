@@ -4,7 +4,7 @@
 --           (same file in the game folder and on the server. The new lazer / capacitor / generator init.lua files REFUSE to load with the old config: they need the heat knobs and
 --            ACFLazers.HeatCool from this one, and the new file lua/autorun/acf_lazers_heat.lua)
 --
--- CHANGES vs the config of handoff 14 (everything since is listed, so this is right whether or not you applied 15 and 15.1). Search this file for [CHANGED n].
+-- CHANGES vs the config of handoff 14 (everything since is listed, so this is right whether or not you applied 15, 15.1 and 15.2). Search this file for [CHANGED n].
 --   1  THE HEAT KNOBS: one new block "HEAT" (everything starting with Heat...), between the generator hub and the linking tools. Temperatures are typed in Fahrenheit.
 --   2  THE HEAT HELPERS: new pure-maths section "HEAT HELPERS" (cooling law, heat capacity from mass, the scalars along the size of a lazer / capacitor / generator, the lock-out
 --      percent, the quadratic damage, the explosion filler). Nothing in it touches the game.
@@ -15,6 +15,14 @@
 --   5  (15.2) THE RADIATOR HELPERS: new pure-maths section "RADIATOR HELPERS" (size -> mass / radius / sap rate / waste, efficiency, the weighted fill that shares the cooling among the hot parts,
 --      one step of a radiator pool, where a radiator's own heat settles, and the numbers the tool shows). Nothing in it touches the game.
 --   6  (15.2) LinkClasses has acf_radiator, so every tool can select and link radiators.
+--   7  (15.3) NATURAL COOLING TWICE AS FAST: HeatCoolTau 150 (was 300).
+--   8  (15.3) THE LOCK-OUT IS GONE: a lazer fires whenever it has power, however hot it is. HeatLockStartPct, HeatLockEndPctSmall, HeatLockEndPctBig and the helper GetLazerLockEndPct are removed.
+--      Make your own safeguard with the lazer's wire outputs HeatPct / HeatF / HeatKJ.
+--   9  (15.3) TURBO DAMAGE: past HeatTurboStartPct of its limit anything that damages itself from heat takes HeatTurboPct percent of its max health per second on top, growing steeply
+--      (HeatTurboPower). GetHeatDamagePct has the turbo term.
+--   10 (15.3) HOT LAZERS SET PLAYERS ON FIRE: the HeatIgnite... knobs, and the pure box test ObbTouchesAabb the heat file uses.
+--   11 (15.3) THE COOLANT: the Rad...Coolant... / RadFlush... / RadPuff... knobs (tank size, how the tank changes the cooling, the flush, the steam, the sounds) and the helpers
+--      GetRadCoolantCapacity, GetRadFlushRate, GetRadCoolantMult, ClampRadColor. GetRadReadout also reports the tank.
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -348,7 +356,7 @@ table.Merge(ACFLazers.Config, {
     -- COOLING. Every entity cools toward room temperature by itself:  loss per second = excess x a x (1 + HeatCoolHotBoost x excess / the HOT excess),  a = multiplier / HeatCoolTau.
     -- That is an ordinary exponential cooling (time constant HeatCoolTau) that cools faster the hotter the thing is: at the HOT temperature it cools (1 + HeatCoolHotBoost) times as fast.
     -- All props cool at the same rate. Lazers and the other ACF entities (capacitors, generators ...) have a multiplier of their own, relative to props.
-    HeatCoolTau         = 300,    -- seconds. The base cooling time constant of every prop: after this long a mildly warm prop has lost 63% of its excess heat. Lower = cools faster
+    HeatCoolTau         = 150,    -- seconds. The base cooling time constant of every prop: after this long a mildly warm prop has lost 63% of its excess heat. Lower = cools faster [CHANGED 7] (15.3: was 300, so everything now cools twice as fast)
     HeatCoolHotBoost    = 1,      -- extra cooling at the HOT temperature, as a multiple of the base (0 = plain exponential at every temperature, 1 = twice as fast at HOT, 3 = four times)
     HeatCoolMultLazer   = 1,      -- cooling speed of lazers relative to props (2 = twice as fast)
     HeatCoolMultACF     = 1,      -- cooling speed of every OTHER ACF entity (capacitors, generators ...) relative to props
@@ -356,7 +364,7 @@ table.Merge(ACFLazers.Config, {
     -- BOOKKEEPING (nothing to tune unless you are chasing lag)
     HeatForgetBelowK    = 0.5,    -- kelvin above room temperature. A cooling entity this close to room temperature is forgotten (it costs nothing again)
     HeatSweepInterval   = 5,      -- seconds between the sweeps that forget cooled-down entities and entities that were removed
-    HeatCheckInterval   = 0.1,    -- seconds between a lazer's heat checks (lock-out, heat damage). A beam hit / a shot is counted at once, only the checks wait
+    HeatCheckInterval   = 0.1,    -- seconds between a lazer's heat checks (the damage a lazer over its limit does to itself). A beam hit / a shot is counted at once, only the checks wait
     HeatMaxDeltaTime    = 0.5,    -- seconds. The longest "time since the last check" a heat check will act for (a lag spike cannot turn into one huge burst of heat damage)
 
     -- WHERE THE HEAT COMES FROM. Small .. Big = a straight line over the size of the thing (see the top of this block).
@@ -369,15 +377,10 @@ table.Merge(ACFLazers.Config, {
     HeatGenSmall        = 1,      -- a generator hub adds this many kJ of heat per kJ it makes
     HeatGenBig          = 1,
 
-    -- LAZERS: THE LIMIT, THE LOCK-OUT AND THE DAMAGE.
-    -- HeatLazerCapF is 100% for a lazer (0% = room temperature). Above 100% the lazer damages itself (see HeatLazerDamage).
-    -- LOCK-OUT. When a lazer's heat reaches HeatLockStartPct it is marked overheated, but the beam keeps going for as long as Fire is held. When the lazer stops (Fire released, or the
-    -- capacitors ran dry) it goes into COOLING MODE: "unavailable" until its heat is down to HeatLockEndPct (small .. big lazer). If it stopped BELOW HeatLockStartPct it was never
-    -- marked, and it can fire again whenever the capacitors hold the power. If Fire is still held when the cooling ends, the lazer starts again by itself (like a lazer that ran dry).
+    -- LAZERS: THE LIMIT AND THE DAMAGE. [CHANGED 8] (15.3: the lock-out is GONE. A lazer fires whenever it has power, however hot it is. Make your own safeguard with the wire outputs
+    -- HeatPct / HeatF / HeatKJ of the lazer, and use radiators to keep it cool.)
+    -- HeatLazerCapF is 100% for a lazer (0% = room temperature). Above 100% the lazer damages itself (see HeatLazerDamage, and the TURBO knobs further down for what happens past 120%).
     HeatLazerCapF       = 1100,   -- degrees Fahrenheit. 100% of a lazer. Separate from HeatHotF so the two can be tuned apart (they start equal)
-    HeatLockStartPct    = 90,     -- percent of the lazer's limit. Reaching this marks the lazer overheated (one number for every lazer)
-    HeatLockEndPctSmall = 25,     -- percent of the lazer's limit the heat must fall to before the lazer can fire again: the smallest lazer ...
-    HeatLockEndPctBig   = 25,     -- ... and the biggest lazer. Always kept under HeatLockStartPct
     HeatLazerDamage     = 4,      -- percent of the lazer's MAX HEALTH lost per second when it is twice as hot as its limit (200%). The loss grows with the SQUARE of how far over the limit it is: half as
     --                               far over (150%) = a quarter of this, 10% over = 1/100 of this. 0 = lazers never hurt themselves
     HeatExplodeChance   = 0.5,    -- 0..1. A lazer that dies from its own heat WHILE FIRING explodes with this chance; otherwise (and always when it was not firing) it just dies
@@ -391,6 +394,24 @@ table.Merge(ACFLazers.Config, {
     -- capacitor also rolls its usual explosion dice (CapExplode...), because heat damage is damage.
     HeatCapCritFrac     = 0.5,
     HeatCapDamage       = 4,      -- percent of the capacitor's MAX HEALTH lost per second at twice its critical heat (200%), growing with the square of how far over it is. 0 = never
+
+
+    -- TURBO DAMAGE. [CHANGED 9] Anything that damages itself from heat (lazers, capacitors, radiators) takes its normal quadratic damage (the HeatLazerDamage / HeatCapDamage / RadDamage knobs)
+    -- AND, once it is past HeatTurboStartPct of its own limit, this on top: HeatTurboPct percent of its MAX HEALTH per second at exactly that temperature, growing with
+    -- (how hot / HeatTurboStartPct) ^ HeatTurboPower. With the defaults: 120% = 20% per second (dead in 5 s), 130% = 33% (3 s), 150% = 77% (1.3 s), 200% = 430% (a fraction of a second).
+    -- It is a cliff on purpose: below the start it is not there at all. A thing whose own damage knob is 0 ("never hurts itself") takes no turbo damage either.
+    HeatTurboStartPct   = 120,    -- percent of the limit where the turbo damage starts
+    HeatTurboPct        = 20,     -- percent of MAX health per second at exactly HeatTurboStartPct. 0 = no turbo damage at all
+    HeatTurboPower      = 6,      -- how fast it grows past the start: x ((how hot) / HeatTurboStartPct) ^ this. 1 = in proportion, 6 = very steeply
+
+    -- LAZERS SET PLAYERS ON FIRE. [CHANGED 10] A lazer (any class in HeatIgniteClasses) that is at least HeatIgniteF hot sets every player on fire whose body box touches the lazer's box.
+    -- The fire is put out HeatIgniteLinger seconds after the player stops touching a hot lazer (or when the lazer cools under HeatIgniteF).
+    HeatIgniteF         = 500,    -- degrees Fahrenheit. A lazer at or above this ignites players that touch it
+    HeatIgniteLinger    = 1,      -- seconds the fire goes on after the player gets off the lazer
+    HeatIgniteReach     = 0,      -- units. The lazer's box is grown by this much on every side before the touch test (0 = real contact only)
+    HeatIgniteInterval  = 0.1,    -- seconds between the touch checks (one timer for every lazer and player)
+    HeatIgniteLife      = 5,      -- seconds a fire we light is lit for in one go. We put it out ourselves at the linger time; this only matters if the check ever stopped running
+    HeatIgniteClasses   = { acf_lazer = true }, -- which entities ignite players. Add acf_capacitor = true, acf_radiator = true ... if you want those to burn people too
 
     -- TESTING AID
     HeatInfoDistance    = 4096,   -- units. The console command acf_lazers_heat_info prints the heat of whatever you are looking at, up to this far away
@@ -450,6 +471,37 @@ table.Merge(ACFLazers.Config, {
     -- RadReadoutInterval seconds per player.
     RadReadoutDistance = 256,
     RadReadoutInterval = 0.25,
+
+    -- COOLANT. [CHANGED 11] (15.3) Every radiator has a coolant tank. A full tank is a radiator at full strength; the less coolant it holds, the less heat it takes out (RadDryPct at empty).
+    -- FLUSH (wire input Flush, any value above 0): the radiator vents its coolant as a coloured cloud of steam, with a hissing sound, and every litre that leaves carries RadFlushKJPerLiter of
+    -- heat out of the hot parts around it, on top of its normal rate. A tank is refilled by an ACF SUPPLY CRATE: the radiator is registered with ACF as a fuel tank would be (the Fuel Tanks
+    -- list of the supply crate: Amount, Capacity, Consume), so a supply crate within ACF.SupplyDistance tops it up exactly as it tops up a fuel tank. [GUESS] what the coolant does for the
+    -- radiator: the dry strength and the heat taken by a flush are my own guesses (RadDryPct = 100 makes the tank irrelevant to the cooling, RadFlushKJPerLiter = 0 makes the flush only a show).
+    RadModelLength      = 42,     -- units. The length of the model at scale 1 (RadModelWidth is its width, RadModelHeight its height). The coolant volume comes from the box they make
+    RadModelHeight      = 30,     -- units. The height of the model at scale 1
+    RadCoolantBoxFrac   = 1 / 8,  -- the tank holds this share of the volume of the radiator's bounding box (1/8 = 108 litres in the default 42 x 42 x 30 radiator)
+    RadCoolantLitersPerUnit3 = 0.016387064, -- litres per cubic unit (ACF reads one unit as one inch: 1 cubic inch = 0.016387 litres) [SEEN acf/core/globals.lua:191, used by acf_container's CalcVolumeAndCapacity]
+    RadCoolantStart     = 1,      -- how full a new radiator is (1 = full, 0 = empty)
+    RadCoolantUnitMass  = 1,      -- kg per litre of coolant: what a supply crate takes out of its own stock for each litre it gives (ACF fuel is 0.7 to 0.85; water is 1)
+    RadDryPct           = 25,     -- percent of its sap rate a radiator works at with an EMPTY tank. Between empty and full it is a straight line
+    RadFlushFraction    = 0.5,    -- a flush vents this share of a FULL tank ...
+    RadFlushSeconds     = 5,      -- ... in this many seconds (default: half the tank in 5 s, the whole tank in 10 s; the speed is the same whatever the level, so a half-full tank empties in 5 s)
+    RadFlushKJPerLiter  = 2260,   -- kJ of heat each litre vented takes out of the hot parts of the pool (2260 = what it takes to boil a litre of water to steam [KNOW]). 0 = the flush takes no heat
+    RadFlushPool        = false,  -- false = each radiator only flushes on its own Flush input; true = the Flush input of one radiator flushes EVERY radiator linked to it (the pool)
+    RadCoolantColor     = { 90, 220, 150 }, -- red, green, blue of the coolant when the tool does not say (it is the starting colour of the tool's colour picker)
+    RadPuffsPerSecond   = 45,     -- particles of steam per second while a radiator of scale 1 vents (bigger radiators puff more)
+    RadPuffMaxPerFrame  = 40,     -- the most puffs one radiator makes in one frame (a slow computer must not drown in them)
+    RadPuffDistance     = 3000,   -- units. A radiator further away from you than this makes no puffs on your computer
+    RadPuffLife         = 1.6,    -- seconds a puff lives
+    RadPuffSize         = 12,     -- units. The size of a puff when it is born at scale 1; it grows to 4 times that
+    RadPuffSpeed        = 110,    -- units per second the puffs shoot out at (scale 1)
+    RadPuffMaterial     = "particle/particle_smokegrey", -- the sprite of a puff [GUESS] (an HL2 smoke sprite; change it if the puffs are invisible)
+    RadFlushLoopSound   = "ambient/gas/steam_loop1.wav", -- the hissing that goes on while it vents [GUESS] (an HL2 sound; "" = none). Check:  lua_run_cl print(file.Exists("sound/ambient/gas/steam_loop1.wav", "GAME"))
+    RadFlushStartSound  = "ambient/gas/steam2.wav",      -- the burst when a flush starts ("" = none)
+    RadFlushVolume      = 0.9,    -- 0..1
+    RadFlushPitchSmall  = 125,    -- the pitch of the hiss of the narrowest radiator (100 = normal) ...
+    RadFlushPitchBig    = 80,     -- ... and of the widest
+
 
     -- ===================== LINKING TOOLS =====================
     -- The things the link tools (right-click / shift / reload on the lazer, capacitor and generator tools) can select and link. ACF's own link system decides which PAIRS work:
@@ -826,21 +878,79 @@ function ACFLazers.GetGenHeatScalar(hp)
     return HeatSizeLerp((hp - C.GenHPMin) / math.max(C.GenHPMax - C.GenHPMin, 0.0001), C.HeatGenSmall, C.HeatGenBig)
 end
 
---- Percent of its limit a lazer of this caliber must cool down to before it fires again. Never at or above the lock-start percent (that would lock it out for ever).
-function ACFLazers.GetLazerLockEndPct(caliber)
-    local C   = ACFLazers.Config
-    local lockEnd = HeatSizeLerp(ACFLazers.GetSizeFraction(caliber), C.HeatLockEndPctSmall, C.HeatLockEndPctBig)
-
-    return math.Clamp(lockEnd, 0, math.max(C.HeatLockStartPct - 1, 0))
-end
-
---- Percent of max health lost per second at `over` (0 = right at the limit, 1 = twice the limit) for a base number (the damage knob = the loss at over 1): base x over^2.
+--- Percent of max health lost per second at `over` (0 = right at the limit, 1 = twice the limit) for a base number (the damage knob = the loss at over 1): base x over^2. [CHANGED 9]
+--- PLUS the TURBO term once the thing is past HeatTurboStartPct of its limit: HeatTurboPct x (how hot / HeatTurboStartPct) ^ HeatTurboPower, where "how hot" = 1 + over.
+--- A base of 0 ("never hurts itself") gives 0 for both; at or under the limit it is 0. Used by lazers, capacitors and radiators alike, each with its own base and its own limit.
 function ACFLazers.GetHeatDamagePct(over, base)
+    local C = ACFLazers.Config
+
     over = tonumber(over) or 0
 
     if over ~= over or over <= 0 then return 0 end
 
-    return math.max(tonumber(base) or 0, 0) * over * over
+    base = math.max(tonumber(base) or 0, 0)
+
+    if base <= 0 then return 0 end
+
+    local pct   = base * over * over
+    local start = math.max((tonumber(C.HeatTurboStartPct) or 120) / 100, 1) -- never before the limit itself
+    local hot   = 1 + over
+
+    if hot > start then
+        pct = pct + math.max(tonumber(C.HeatTurboPct) or 0, 0) * (hot / start) ^ math.max(tonumber(C.HeatTurboPower) or 0, 0)
+    end
+
+    return pct
+end
+
+--- Does an oriented box touch an axis-aligned box? (a separating axis test: the 3 + 3 face axes and the 9 edge-edge axes; touching exactly counts as touching.) Pure maths: every vector
+--- is a plain {x, y, z} table. This is what decides whether a player stands in a hot lazer. [CHANGED 10]
+---   ac = centre of the oriented box,  au = its three unit axes { {x,y,z}, {x,y,z}, {x,y,z} },  ae = its three half sizes along those axes
+---   bc = centre of the axis-aligned box,  bh = its three half sizes along x, y, z
+function ACFLazers.ObbTouchesAabb(ac, au, ae, bc, bh)
+    local eps = 1e-9
+    local R, AbsR, t = {}, {}, {}
+    local d = { bc.x - ac.x, bc.y - ac.y, bc.z - ac.z }
+
+    for i = 1, 3 do
+        local axis = au[i]
+
+        R[i]    = { axis.x, axis.y, axis.z } -- the oriented box's axis i, written in the world axes: R[i][j] = axis i . world axis j
+        AbsR[i] = { math.abs(axis.x) + eps, math.abs(axis.y) + eps, math.abs(axis.z) + eps }
+        t[i]    = d[1] * axis.x + d[2] * axis.y + d[3] * axis.z -- the centre-to-centre vector in the oriented box's frame
+    end
+
+    local bhh = { bh.x, bh.y, bh.z }
+    local td  = d -- the same vector in the world frame
+
+    -- the oriented box's own three axes
+    for i = 1, 3 do
+        local rb = bhh[1] * AbsR[i][1] + bhh[2] * AbsR[i][2] + bhh[3] * AbsR[i][3]
+
+        if math.abs(t[i]) > ae[i] + rb then return false end
+    end
+
+    -- the world axes
+    for j = 1, 3 do
+        local ra = ae[1] * AbsR[1][j] + ae[2] * AbsR[2][j] + ae[3] * AbsR[3][j]
+
+        if math.abs(td[j]) > ra + bhh[j] then return false end
+    end
+
+    -- the nine cross axes (axis i of the oriented box x world axis j)
+    for i = 1, 3 do
+        local i1, i2 = i % 3 + 1, (i + 1) % 3 + 1
+
+        for j = 1, 3 do
+            local j1, j2 = j % 3 + 1, (j + 1) % 3 + 1
+            local ra     = ae[i1] * AbsR[i2][j] + ae[i2] * AbsR[i1][j]
+            local rb     = bhh[j1] * AbsR[i][j2] + bhh[j2] * AbsR[i][j1]
+
+            if math.abs(t[i2] * R[i1][j] - t[i1] * R[i2][j]) > ra + rb then return false end
+        end
+    end
+
+    return true
 end
 
 --- HE filler (kg) of the explosion of a lazer that dies of heat while firing: its draw x HeatExplodeKJMult kJ, over ACF's kJ per kg of HE, x HeatExplosionMult.
@@ -1068,7 +1178,90 @@ function ACFLazers.GetRadReadout(width)
 
     show.best = best
 
+    -- [CHANGED 11] the tank: litres, how fast a flush empties it, and the extra kJ/s a flush takes out of the hot parts while it lasts
+    show.liters    = ACFLazers.GetRadCoolantCapacity(w)
+    show.flushRate = ACFLazers.GetRadFlushRate(show.liters)
+    show.flushKJ   = show.flushRate * math.max(C.RadFlushKJPerLiter, 0)
+
     return show
+end
+
+-- ===================== RADIATOR COOLANT HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 11]
+
+--- Litres a FULL tank of a radiator this wide holds: RadCoolantBoxFrac of the volume of its bounding box. The box is RadModelWidth x RadModelLength x RadModelHeight units at scale 1
+--- and grows with the cube of the scale; a cubic unit is RadCoolantLitersPerUnit3 litres (ACF reads a unit as an inch).
+function ACFLazers.GetRadCoolantCapacity(width)
+    local C      = ACFLazers.Config
+    local scale  = ACFLazers.GetRadScale(ACFLazers.ClampNumber(width, C.RadWidthDefault, 0, math.huge))
+    local volume = C.RadModelWidth * C.RadModelLength * C.RadModelHeight * scale * scale * scale
+
+    return math.max(volume * C.RadCoolantBoxFrac * C.RadCoolantLitersPerUnit3, 0) -- (a knob below 0 gives no tank)
+end
+
+--- Litres per second a flush vents for a tank of this capacity: RadFlushFraction of a FULL tank every RadFlushSeconds. The speed is the same whatever the level (a half-full tank
+--- empties in half the time), so it is a constant for the radiator.
+function ACFLazers.GetRadFlushRate(capacity)
+    local C = ACFLazers.Config
+
+    return math.max(tonumber(capacity) or 0, 0) * math.max(C.RadFlushFraction, 0) / math.max(C.RadFlushSeconds, 1e-6)
+end
+
+--- How strong the radiator works (0..1 of its sap rate) with a tank that is `fill` full (0 = empty, 1 = full): a straight line from RadDryPct percent up to 100%.
+function ACFLazers.GetRadCoolantMult(fill)
+    local C   = ACFLazers.Config
+    local dry = math.Clamp((tonumber(C.RadDryPct) or 0) / 100, 0, 1)
+
+    return dry + (1 - dry) * ACFLazers.ClampNumber(fill, 0, 0, 1)
+end
+
+--- A coolant colour from the tool, a dupe or the config made safe: three whole numbers from 0 to 255. Anything that is not a number takes the matching channel of RadCoolantColor.
+function ACFLazers.ClampRadColor(r, g, b)
+    local d = ACFLazers.Config.RadCoolantColor
+
+    if type(d) ~= "table" then d = { 90, 220, 150 } end
+
+    return math.Round(ACFLazers.ClampNumber(r, tonumber(d[1]) or 90, 0, 255)),
+           math.Round(ACFLazers.ClampNumber(g, tonumber(d[2]) or 220, 0, 255)),
+           math.Round(ACFLazers.ClampNumber(b, tonumber(d[3]) or 150, 0, 255))
+end
+
+--- The pitch (100 = normal) of the steam hiss of a radiator this wide: a straight line from RadFlushPitchSmall (narrowest) to RadFlushPitchBig (widest), kept in the range a sound can have.
+function ACFLazers.GetRadFlushPitch(width)
+    local C = ACFLazers.Config
+
+    return math.Clamp(Lerp(ACFLazers.GetRadSizeFraction(width), tonumber(C.RadFlushPitchSmall) or 100, tonumber(C.RadFlushPitchBig) or 100), 1, 255)
+end
+
+--- The steam colour as ONE whole number for the network (the client gets a single value): red * 65536 + green * 256 + blue. The inputs are made safe first.
+function ACFLazers.PackRadColor(r, g, b)
+    r, g, b = ACFLazers.ClampRadColor(r, g, b)
+
+    return r * 65536 + g * 256 + b
+end
+
+--- The reverse of PackRadColor: red, green, blue (0..255 each). Anything that is not a number comes out as the default colour.
+function ACFLazers.UnpackRadColor(packed)
+    local n = tonumber(packed)
+
+    if not n or n ~= n or n < 0 or n > 16777215 then return ACFLazers.ClampRadColor(nil, nil, nil) end
+
+    n = math.floor(n)
+
+    return math.floor(n / 65536) % 256, math.floor(n / 256) % 256, n % 256
+end
+
+--- How many puffs of steam a radiator of this scale makes in a frame of `dt` seconds, and the fraction of a puff that carries over to the next frame (give the carry back next time).
+--- RadPuffsPerSecond puffs a second at scale 1, in proportion to the scale; never more than RadPuffMaxPerFrame in one frame (the puffs a slow frame cannot make are not made up for).
+function ACFLazers.GetRadPuffs(scale, dt, carry)
+    local C     = ACFLazers.Config
+    local rate  = math.max(tonumber(C.RadPuffsPerSecond) or 0, 0) * math.max(tonumber(scale) or 0, 0)
+    local total = ACFLazers.ClampNumber(carry, 0, 0, 1) + rate * ACFLazers.ClampNumber(dt, 0, 0, 0.25) -- (the carry is a fraction of a puff: anything else is forgotten)
+
+    if total ~= total or total < 0 then total = 0 end
+
+    local whole = math.floor(total)
+
+    return math.min(whole, math.max(math.floor(tonumber(C.RadPuffMaxPerFrame) or 0), 0)), total - whole
 end
 
 -- ===================== GENERATOR HUB HELPERS (pure maths: nothing here touches the game) =====================

@@ -1,7 +1,10 @@
 -- =========================================================================
 -- ACF RADIATOR: SERVER FILE
 -- Goes to:  lua/entities/acf_radiator/init.lua      (the server runs this one. The CLIENT file is cl_init.lua next to it: never put this file there)
---           NEEDS the 15.2 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua: it refuses to load without them
+--           NEEDS the 15.3 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua: it refuses to load without them
+--
+-- 15.3 ADDS THE COOLANT (search for [CHANGED 1]): a tank (1/8 of the bounding box, 108 litres at the default size), a Flush wire input that vents it as a coloured cloud of steam with a
+--   hissing sound while taking heat out with it, and a restock from an ACF supply crate (the radiator registers itself in ACF's fuel tank list: Amount, Capacity, Consume).
 --
 -- NEW (15.2). THE RADIATOR (heat sink): takes heat out of the parts around it. All the cooling logic is HERE; the parts hold none.
 --   * size: the tool slider is the WIDTH in units (config RadWidthMin..RadWidthMax). The model (RadModel, 42 x 42 x 30 at scale 1) is scaled by width / RadModelWidth. The width sets the
@@ -14,9 +17,10 @@
 --     overclock and efficiency. A radiator on its own is a pool of one
 --   * its own heat: it makes waste heat (RadWaste x the work it TRIES to do); its efficiency is 100% up to RadEffStartPct of HOT, falls in a straight line to RadEffFloorPct at 100%;
 --     over 100% it damages itself (RadDamage, quadratic, through ACF's damage pipeline) until it dies. It cools by itself like any ACF entity
---   * wire:  input Overclock (multiplies the sap rate and the waste; unwired = RadOverclockDefault, 0 = off, at most RadOverclockMax)
+--   * wire:  inputs Overclock (multiplies the sap rate and the waste; unwired = RadOverclockDefault, 0 = off, at most RadOverclockMax)
+--                    Flush (above 0 = vent the coolant; with RadFlushPool the whole pool vents)
 --            outputs SapRate (kJ/s it really takes out), Attempted (kJ/s it tries to take out), Efficiency (percent), Members (parts in range), HotParts (hot parts in its pool),
---            Pool (radiators in its pool), Radius (units), HeatKJ, HeatF, HeatPct (percent of the HOT temperature)
+--            Pool (radiators in its pool), Radius (units), HeatKJ, HeatF, HeatPct (percent of the HOT temperature), Coolant (litres), CoolantPct, Flushing (1 while it vents)
 -- All numbers live in lua/autorun/acf_lazers_config.lua (everything starting with Rad...).
 -- =========================================================================
 
@@ -42,14 +46,14 @@ if not (ACFLazers.Heat and ACFLazers.Heat.Add and ACFLazers.GetHeatCapacity) the
     return
 end
 
-if not (ACFLazers.GetRadSap and ACFLazers.RadPoolStep and ACFLazers.WeightedFill) then
-    ErrorNoHalt("[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator knobs or helpers). Copy the config of the same batch (15.2), then restart.\n")
+if not (ACFLazers.GetRadSap and ACFLazers.RadPoolStep and ACFLazers.WeightedFill and ACFLazers.GetRadCoolantCapacity) then
+    ErrorNoHalt("[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator or coolant knobs or helpers). Copy the config of the same batch (15.3), then restart.\n")
     return
 end
 
 local Heat = ACFLazers.Heat
 
-local VERSION = "15.2"
+local VERSION = "15.3"
 MsgN("[acf_radiator] init.lua version " .. VERSION .. " loaded")
 
 -- How many radiators one player may own (GMod reads a server variable called sbox_max<name>; CreateConVar does nothing if it already exists).
@@ -163,13 +167,34 @@ function Rad.RunGroup(group, now, dt)
 
     if #live == 0 then return end
 
+    -- 0. [CHANGED 1] the coolant and the flush. Each radiator works at the strength its tank gives it at the START of the sweep; then the radiators that are told to flush (their own
+    -- Flush input, or any Flush input in the pool with RadFlushPool) vent what they vent in this sweep. The litres that leave carry heat away (step 3b).
+    local anyFlush = false
+
+    if CFG.RadFlushPool then
+        for _, radiator in ipairs(live) do
+            if radiator.FlushWire then anyFlush = true; break end
+        end
+    end
+
+    local ventKJ = 0
+
+    for _, radiator in ipairs(live) do
+        radiator.CoolantMult = ACFLazers.GetRadCoolantMult(radiator:GetFill())
+
+        local drained = radiator:Vent(radiator.FlushWire or anyFlush, dt)
+
+        radiator.VentRate = dt > 0 and drained / dt or 0
+        ventKJ            = ventKJ + drained * CFG.RadFlushKJPerLiter -- (a knob below 0 makes ventKJ negative: the check below then takes no heat)
+    end
+
     -- 1. what the pool could take, and what is there to take
     local hot, weights, limits, avail = GatherHot(live)
     local items = {}
 
     for i, radiator in ipairs(live) do
         local overclock = radiator:GetOverclock()
-        local sap       = ACFLazers.GetRadSap(radiator:GetWidth()) * overclock
+        local sap       = ACFLazers.GetRadSap(radiator:GetWidth()) * overclock * radiator.CoolantMult
 
         radiator.Overclock  = overclock
         radiator.NominalSap = sap
@@ -190,6 +215,25 @@ function Rad.RunGroup(group, now, dt)
         end
     end
 
+    -- 3b. [CHANGED 1] the vented coolant takes heat with it: the same sharing by temperature, from what the parts hold NOW (after step 3), on top of the radiators' own rate
+    local boiled = 0
+
+    if ventKJ > 0 then
+        local hot2, weights2, limits2, avail2 = GatherHot(live)
+
+        if avail2 > 0 then
+            local takes2 = ACFLazers.WeightedFill(weights2, limits2, ventKJ) -- (it never gives more than the parts hold)
+
+            for i, ent in ipairs(hot2) do
+                if takes2[i] > 0 and IsValid(ent) then
+                    Heat.Add(ent, -takes2[i])
+
+                    boiled = boiled + takes2[i]
+                end
+            end
+        end
+    end
+
     -- 4. the radiators: waste heat, readings, then each one's own damage / outputs / hover text
     for i, radiator in ipairs(live) do
         local step = out[i]
@@ -199,6 +243,7 @@ function Rad.RunGroup(group, now, dt)
         radiator.Attempted = dt > 0 and step.work / dt or 0
         radiator.SapRate   = dt > 0 and step.removed / dt or 0
         radiator.PoolSap   = dt > 0 and total / dt or 0
+        radiator.PoolBoil  = dt > 0 and boiled / dt or 0
         radiator.PoolSize  = #live
         radiator.HotParts  = #hot
     end
@@ -260,6 +305,10 @@ function ENT:TriggerInput(name, value)
     if name == "Overclock" then
         self.WireOverclock    = tonumber(value) or 0
         self.OverclockTouched = true
+    elseif name == "Flush" then
+        local v = tonumber(value) or 0 -- [CHANGED 1] anything above 0 vents the coolant (text counts as 0; NaN is not above 0)
+
+        self.FlushWire = v > 0
     end
 
     self:UpdateOverlay()
@@ -288,11 +337,26 @@ function ENT:Initialize()
     self.OverlaySig     = ""
     self.HeatDying      = false
 
+    -- [CHANGED 1] the coolant tank. ApplyData sizes it (Capacity, litres) and fills it (Amount, litres). The names Amount / Capacity / GetUnitMass / Consume are the ones ACF's SUPPLY CRATE
+    -- looks for in its list of fuel tanks (ACF.FuelTanks, entities/acf_supply/modules/supply.lua): being in that list is all it takes to be topped up by a supply crate.
+    self.Capacity       = 0       -- litres a full tank holds
+    self.Amount         = 0       -- litres in the tank now
+    self.TankReady      = false   -- false until the first ApplyData has filled the tank (a resize after that keeps the level)
+    self.FuelType       = "Coolant" -- (the supply crate only asks whether it is "Electric", for the sound it plays)
+    self.FlushWire      = false   -- the Flush input is on
+    self.Venting        = false   -- it is venting right now
+    self.VentRate       = 0       -- litres per second it vented in the last sweep
+    self.CoolantMult    = 1       -- how strong the tank lets it work (1 = full strength), as of the last sweep
+    self.PoolBoil       = 0       -- kJ per second the pool's venting took out of the hot parts in the last sweep
+    self.CoolantR, self.CoolantG, self.CoolantB = ACFLazers.ClampRadColor(nil, nil, nil)
+
+    if ACF.FuelTanks then ACF.FuelTanks[self] = true end
+
     Rad.List[self]  = true
     Rad.GroupsDirty = true
 
     if WireLib then
-        WireLib.CreateInputs(self, { "Overclock" })
+        WireLib.CreateInputs(self, { "Overclock", "Flush" })
         WireLib.CreateOutputs(self, {
             "SapRate",    -- kJ per second it really takes out
             "Attempted",  -- kJ per second it tries to take out
@@ -303,7 +367,10 @@ function ENT:Initialize()
             "Radius",     -- units
             "HeatKJ",     -- kJ of heat above room temperature
             "HeatF",      -- temperature in Fahrenheit
-            "HeatPct"     -- percent of the HOT temperature (100 = HOT, above = damaging itself)
+            "HeatPct",    -- percent of the HOT temperature (100 = HOT, above = damaging itself)
+            "Coolant",    -- litres of coolant in the tank
+            "CoolantPct", -- percent full
+            "Flushing"    -- 1 while it is venting
         })
     end
 
@@ -313,6 +380,8 @@ end
 -- Clamp whatever the tool / a dupe / an update sends us (the server never trusts the client).
 local function VerifyData(Data)
     Data.Width = ACFLazers.ClampRadWidth(Data.Width)
+
+    Data.CoolantR, Data.CoolantG, Data.CoolantB = ACFLazers.ClampRadColor(Data.CoolantR, Data.CoolantG, Data.CoolantB) -- [CHANGED 1] the colour of the steam
 end
 
 -- Model, scale, ACF health and mass for a width. Same order the lazer, the capacitor and the generator use: scale first (that makes the physics object), then ACF.Activate, then the mass.
@@ -326,13 +395,29 @@ end
 
 -- Apply a whole Data table {Width = units}. Used by spawn AND by update. Width is a plain field on purpose: the duplicator saves entity fields (see Entities.Register at the bottom).
 function ENT:ApplyData(Data)
+    if self.TankReady then -- an update that says nothing about the colour keeps the colour it has
+        if Data.CoolantR == nil then Data.CoolantR = self.CoolantR end
+        if Data.CoolantG == nil then Data.CoolantG = self.CoolantG end
+        if Data.CoolantB == nil then Data.CoolantB = self.CoolantB end
+    end
+
     VerifyData(Data)
 
     self.Width = Data.Width
     self.Name  = string.format("%d-unit Radiator", Data.Width) -- the undo list uses Entity.Name
 
+    self.CoolantR, self.CoolantG, self.CoolantB = Data.CoolantR, Data.CoolantG, Data.CoolantB -- [CHANGED 1] plain fields: the duplicator saves them (see Entities.Register)
+
     self:SetNW2Int("ACFRadWidth", self.Width)
+    self:SetNW2Int("ACFRadColor", ACFLazers.PackRadColor(self.CoolantR, self.CoolantG, self.CoolantB)) -- one number for the client: red * 65536 + green * 256 + blue
     self:ApplyScale(Data.Width)
+
+    -- [CHANGED 1] the tank follows the size. A new radiator starts at RadCoolantStart; one that is resized keeps its level (its share of the tank).
+    local level = self.TankReady and (self.Capacity > 0 and self.Amount / self.Capacity or 0) or ACFLazers.ClampNumber(CFG.RadCoolantStart, 1, 0, 1)
+
+    self.Capacity  = ACFLazers.GetRadCoolantCapacity(Data.Width)
+    self.Amount    = math.Clamp(level, 0, 1) * self.Capacity
+    self.TankReady = true
 
     self.MembersDirty = true -- the radius changed
 
@@ -404,6 +489,80 @@ function ENT:RebuildMembers(now)
     self.NextRefresh    = now + CFG.RadRefreshInterval
 end
 
+-- ===================== THE COOLANT ===================== [CHANGED 1]
+-- The tank holds Capacity litres (RadCoolantBoxFrac of the volume of the radiator's box). A full tank is full strength; the less is in it, the weaker the radiator works (config:
+-- RadDryPct at empty, a straight line up to 100% at full). It is refilled by an ACF supply crate, which treats the radiator like a fuel tank. FLUSH (wire input) vents it as a cloud of steam
+-- with a hiss, RadFlushFraction of a full tank every RadFlushSeconds, and every litre that leaves takes RadFlushKJPerLiter of heat out of the hot parts around it (Rad.RunGroup).
+
+--- kg per litre: what the supply crate takes out of its own stock for each litre it puts in. Never 0 (the crate divides by it).
+function ENT:GetUnitMass()
+    return math.max(tonumber(CFG.RadCoolantUnitMass) or 1, 1e-6)
+end
+
+--- Sets the level (litres), kept between empty and full. NaN and text count as empty.
+function ENT:SetAmount(amount)
+    self.Amount = ACFLazers.ClampNumber(amount, 0, 0, self.Capacity or 0)
+end
+
+--- Takes litres out (a negative number puts litres in: this is how the supply crate fills it, exactly as for a fuel tank).
+function ENT:Consume(amount)
+    local n = tonumber(amount)
+
+    if not n or n ~= n then return end -- (text and NaN change nothing: a bad number must not empty the tank)
+
+    self:SetAmount(self.Amount - n)
+end
+
+--- How full the tank is, 0..1 (SetAmount keeps the level between empty and full). A radiator with no tank at all (RadCoolantBoxFrac 0) counts as full: the whole coolant system is switched off.
+function ENT:GetFill()
+    if (self.Capacity or 0) <= 0 then return 1 end
+
+    return self.Amount / self.Capacity
+end
+
+--- Starts or stops the steam: the network flag the client draws the cloud from, the burst, and the hiss that goes on while it vents.
+function ENT:SetVenting(on)
+    on = on and true or false
+
+    if on == self.Venting then return end
+
+    self.Venting = on
+    self:SetNW2Bool("ACFRadVent", on)
+
+    local pitch  = math.floor(ACFLazers.GetRadFlushPitch(self:GetWidth()) + 0.5)
+    local volume = ACFLazers.ClampNumber(CFG.RadFlushVolume, 0.9, 0, 1)
+
+    if on then
+        local burst, loop = CFG.RadFlushStartSound, CFG.RadFlushLoopSound
+
+        if isstring(burst) and burst ~= "" then self:EmitSound(burst, 75, pitch, volume) end
+
+        if isstring(loop) and loop ~= "" then
+            self.VentSound = self.VentSound or CreateSound(self, loop)
+
+            if self.VentSound then self.VentSound:PlayEx(volume, pitch) end
+        end
+    elseif self.VentSound then
+        self.VentSound:FadeOut(0.4)
+        self.VentSound = nil -- (a new sound is made at the next flush: no doubt about playing one that faded out)
+    end
+end
+
+--- One sweep of venting: `on` = flush, `dt` = seconds. Drains up to RadFlushFraction x capacity / RadFlushSeconds litres per second, never more than is left. Returns the litres that left.
+function ENT:Vent(on, dt)
+    local drained = 0
+
+    if on and dt > 0 and self.Amount > 0 then
+        drained = math.min(self.Amount, ACFLazers.GetRadFlushRate(self.Capacity) * dt)
+
+        self:Consume(drained)
+    end
+
+    self:SetVenting(drained > 0)
+
+    return drained
+end
+
 -- ===================== HEAT =====================
 -- Heat is kept by lua/autorun/acf_lazers_heat.lua; the manager above puts the waste in. The radiator's 100% is the HOT temperature, like a plate's.
 
@@ -465,9 +624,15 @@ function ENT:UpdateStatus()
     elseif not self.HasContraption then
         self.StatusKind = "free"
         self.Status     = "Not constrained to anything: it has no parts to cool"
+    elseif self.Venting then
+        self.StatusKind = "vent"
+        self.Status     = string.format("FLUSHING: venting %.1f L/s of coolant, %.0f kJ/s of heat leaves with it", self.VentRate, self.PoolBoil)
     elseif self.Overclock <= 0 then
         self.StatusKind = "off"
         self.Status     = "Overclock input is 0: switched off"
+    elseif self.Capacity > 0 and self.Amount <= 0 then
+        self.StatusKind = "dry"
+        self.Status     = string.format("OUT OF COOLANT: working at %.0f%% strength. A supply crate refills it", ACFLazers.GetRadCoolantMult(0) * 100)
     elseif self.MemberCount == 0 then
         self.StatusKind = "empty"
         self.Status     = string.format("No other part of its contraption is within %.0f units", ACFLazers.GetRadRadius(self:GetWidth()))
@@ -496,15 +661,18 @@ function ENT:UpdateWireOutputs()
     WireLib.TriggerOutput(self, "HeatKJ", Heat.GetKJ(self))
     WireLib.TriggerOutput(self, "HeatF", Heat.GetTempF(self))
     WireLib.TriggerOutput(self, "HeatPct", self:GetHeatPct() * 100)
+    WireLib.TriggerOutput(self, "Coolant", self.Amount)
+    WireLib.TriggerOutput(self, "CoolantPct", self:GetFill() * 100)
+    WireLib.TriggerOutput(self, "Flushing", self.Venting and 1 or 0)
 end
 
 -- The hover text (ACF's overlay system calls this; ENT:UpdateOverlay() asks it to refresh).
 function ENT:ACF_UpdateOverlayState(State)
-    if self.StatusKind == "over" then
+    if self.StatusKind == "over" or self.StatusKind == "dry" then
         State:AddError(self.Status)
     elseif self.StatusKind == "work" then
         State:AddSuccess(self.Status)
-    elseif self.StatusKind == "hot" or self.StatusKind == "free" or self.StatusKind == "nocfw" or self.StatusKind == "empty" then
+    elseif self.StatusKind == "hot" or self.StatusKind == "free" or self.StatusKind == "nocfw" or self.StatusKind == "empty" or self.StatusKind == "vent" then
         State:AddWarning(self.Status)
     else
         State:AddLabel(self.Status)
@@ -518,6 +686,10 @@ function ENT:ACF_UpdateOverlayState(State)
     State:AddKeyValue("Overclock", string.format("x%.2f (%.0f kJ/s tried)", self.Overclock, self.NominalSap))
     State:AddKeyValue("Taking out", string.format("%.0f kJ/s (efficiency %.0f%%)", self.SapRate, self.Efficiency * 100))
     State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of HOT)", Heat.GetTempF(self), self:GetHeatPct() * 100))
+
+    if self.Capacity > 0 then
+        State:AddProgressBar("Coolant", math.Round(self.Amount, 1), math.Round(self.Capacity, 1), " L") -- [CHANGED 1]
+    end
 
     if self.PoolSize > 1 then
         State:AddKeyValue("Pool", string.format("%d radiators, %.0f kJ/s together, %d hot parts", self.PoolSize, self.PoolSap, self.HotParts))
@@ -535,6 +707,7 @@ function ENT:RefreshOverlay()
         self.HotParts,
         self.PoolSize,
         math.floor(self.Overclock * 10),
+        math.floor(self:GetFill() * 20),                                      -- [CHANGED 1] the tank in steps of 5% (venting shows in StatusKind)
     }, "|")
 
     if signature ~= self.OverlaySig then
@@ -600,6 +773,13 @@ function ENT:OnRemove()
 
     Rad.List[self]  = nil
     Rad.GroupsDirty = true
+
+    if ACF.FuelTanks then ACF.FuelTanks[self] = nil end -- [CHANGED 1] the supply crate forgets it
+
+    if self.VentSound then
+        self.VentSound:Stop()
+        self.VentSound = nil
+    end
 
     ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1
 end
@@ -688,5 +868,5 @@ function MakeACFRadiator(ply, pos, angles, Data)
     return ent
 end
 
--- Dupe key: Width.
-Entities.Register("acf_radiator", MakeACFRadiator, "Width")
+-- Dupe keys: Width, and (15.3) the three channels of the steam colour. A dupe from 15.2 has no colour: the default is used.
+Entities.Register("acf_radiator", MakeACFRadiator, "Width", "CoolantR", "CoolantG", "CoolantB")
