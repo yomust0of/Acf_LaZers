@@ -1,24 +1,25 @@
 -- =========================================================================
 -- ACF RADIATOR: SERVER FILE
 -- Goes to:  lua/entities/acf_radiator/init.lua      (the server runs this one. The CLIENT file is cl_init.lua next to it: never put this file there)
---           NEEDS the 15.3 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua: it refuses to load without them
+--           NEEDS the 15.4 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua: it refuses to load without them
 --
+-- 15.4 (search for [CHANGED 2]): NO MORE OVERCLOCK. The radiator takes out RadSapSmall .. RadSapBig kJ per second (times the strength its tank gives it) and never hurts itself from heat any
+--   more; the Overclock wire input, the damage and the "over its limit" state are gone. The steam sounds FADE OUT when the flush ends (RadFlushFadeSeconds).
 -- 15.3 ADDS THE COOLANT (search for [CHANGED 1]): a tank (1/8 of the bounding box, 108 litres at the default size), a Flush wire input that vents it as a coloured cloud of steam with a
 --   hissing sound while taking heat out with it, and a restock from an ACF supply crate (the radiator registers itself in ACF's fuel tank list: Amount, Capacity, Consume).
 --
 -- NEW (15.2). THE RADIATOR (heat sink): takes heat out of the parts around it. All the cooling logic is HERE; the parts hold none.
 --   * size: the tool slider is the WIDTH in units (config RadWidthMin..RadWidthMax). The model (RadModel, 42 x 42 x 30 at scale 1) is scaled by width / RadModelWidth. The width sets the
---     mass (RadMassMin..RadMassMax), the radius (RadRadiusSmall..Big), the sap rate (RadSapSmall..Big, in kJ per second at overclock 1) and the waste share (RadWasteSmall..Big)
+--     mass (RadMassMin..RadMassMax), the radius (RadRadiusSmall..Big), the sap rate (RadSapSmall..Big, in kJ per second) and the waste share (RadWasteSmall..Big)
 --   * members: every entity with a physics object in the radiator's CONTRAPTION (ACF's own tracking, CFW) and inside its radius, except players, NPCs and radiators. The list is rebuilt
 --     when CFW says the contraption changed (parts added / removed, merged, split), when the radiator is resized or linked, and every RadRefreshInterval seconds as a safety net
 --   * work: ONE timer for all radiators (every RadSweepInterval seconds). Per sweep a radiator pool takes  rate x time  kJ out of the hot members, each giving in proportion to its
 --     temperature above room temperature ^ RadWeightPower (a part never goes below room temperature; what it cannot give goes to the others)
---   * pools: radiators linked to each other (the link tools) are one pool: one combined member list (a part counts once) and the sum of the sap rates. Each keeps its own heat,
---     overclock and efficiency. A radiator on its own is a pool of one
---   * its own heat: it makes waste heat (RadWaste x the work it TRIES to do); its efficiency is 100% up to RadEffStartPct of HOT, falls in a straight line to RadEffFloorPct at 100%;
---     over 100% it damages itself (RadDamage, quadratic, through ACF's damage pipeline) until it dies. It cools by itself like any ACF entity
---   * wire:  inputs Overclock (multiplies the sap rate and the waste; unwired = RadOverclockDefault, 0 = off, at most RadOverclockMax)
---                    Flush (above 0 = vent the coolant; with RadFlushPool the whole pool vents)
+--   * pools: radiators linked to each other (the link tools) are one pool: one combined member list (a part counts once) and the sum of the sap rates. Each keeps its own heat
+--     and efficiency. A radiator on its own is a pool of one
+--   * its own heat: it makes waste heat (RadWaste x the work it TRIES to do); its efficiency is 100% up to RadEffStartPct of HOT, falls in a straight line to RadEffFloorPct at 100% and stays
+--     there above. It never damages itself. It cools by itself HeatCoolMultRad times as fast as a prop
+--   * wire:  input  Flush (above 0 = vent the coolant; with RadFlushPool the whole pool vents)
 --            outputs SapRate (kJ/s it really takes out), Attempted (kJ/s it tries to take out), Efficiency (percent), Members (parts in range), HotParts (hot parts in its pool),
 --            Pool (radiators in its pool), Radius (units), HeatKJ, HeatF, HeatPct (percent of the HOT temperature), Coolant (litres), CoolantPct, Flushing (1 while it vents)
 -- All numbers live in lua/autorun/acf_lazers_config.lua (everything starting with Rad...).
@@ -30,8 +31,6 @@ include("shared.lua")
 
 local ACF         = ACF
 local Contraption = ACF.Contraption
-local Damage      = ACF.Damage
-local Objects     = Damage.Objects
 local Entities    = ACF.Classes.Entities
 
 local CFG = ACFLazers and ACFLazers.Config
@@ -46,14 +45,14 @@ if not (ACFLazers.Heat and ACFLazers.Heat.Add and ACFLazers.GetHeatCapacity) the
     return
 end
 
-if not (ACFLazers.GetRadSap and ACFLazers.RadPoolStep and ACFLazers.WeightedFill and ACFLazers.GetRadCoolantCapacity) then
-    ErrorNoHalt("[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator or coolant knobs or helpers). Copy the config of the same batch (15.3), then restart.\n")
+if not (ACFLazers.GetRadSap and ACFLazers.RadPoolStep and ACFLazers.WeightedFill and ACFLazers.GetRadCoolantCapacity and ACFLazers.GetHeatCoolRate) then
+    ErrorNoHalt("[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator or coolant knobs or helpers). Copy the config of the same batch (15.4), then restart.\n")
     return
 end
 
 local Heat = ACFLazers.Heat
 
-local VERSION = "15.3"
+local VERSION = "15.4"
 MsgN("[acf_radiator] init.lua version " .. VERSION .. " loaded")
 
 -- How many radiators one player may own (GMod reads a server variable called sbox_max<name>; CreateConVar does nothing if it already exists).
@@ -158,7 +157,7 @@ function Rad.RunGroup(group, now, dt)
     local live = {}
 
     for _, radiator in ipairs(group) do
-        if IsValid(radiator) and not radiator.HeatDying then
+        if IsValid(radiator) then
             if radiator.MembersDirty or now >= radiator.NextRefresh then radiator:RebuildMembers(now) end
 
             live[#live + 1] = radiator
@@ -193,10 +192,8 @@ function Rad.RunGroup(group, now, dt)
     local items = {}
 
     for i, radiator in ipairs(live) do
-        local overclock = radiator:GetOverclock()
-        local sap       = ACFLazers.GetRadSap(radiator:GetWidth()) * overclock * radiator.CoolantMult
+        local sap = ACFLazers.GetRadSap(radiator:GetWidth()) * radiator.CoolantMult -- [CHANGED 2] no overclock: the table's rate times the strength the tank gives
 
-        radiator.Overclock  = overclock
         radiator.NominalSap = sap
         radiator.Efficiency = ACFLazers.GetRadEfficiency(radiator:GetHeatPct())
 
@@ -234,7 +231,7 @@ function Rad.RunGroup(group, now, dt)
         end
     end
 
-    -- 4. the radiators: waste heat, readings, then each one's own damage / outputs / hover text
+    -- 4. the radiators: waste heat, readings, then each one's state / outputs / hover text
     for i, radiator in ipairs(live) do
         local step = out[i]
 
@@ -248,7 +245,7 @@ function Rad.RunGroup(group, now, dt)
         radiator.HotParts  = #hot
     end
 
-    for _, radiator in ipairs(live) do radiator:Finish(dt) end
+    for _, radiator in ipairs(live) do radiator:Finish() end
 end
 
 function Rad.Sweep()
@@ -285,27 +282,8 @@ end
 
 -- ===================== WIRE =====================
 
--- The Overclock input, made safe (0 .. RadOverclockMax). Nothing wired = RadOverclockDefault. [GUESS] that Wire keeps the entity a wire comes from in Inputs[name].Src (the generator's
--- Draw input and the capacitor's AllowCharge rely on the same thing). Should this Wire not have it, the last value sent to TriggerInput is used as soon as one has arrived.
-function ENT:GetOverclock()
-    local input = self.Inputs and self.Inputs.Overclock
-    local value = CFG.RadOverclockDefault
-
-    if input and IsValid(input.Src) then
-        self.SrcWorks = true
-        value         = tonumber(input.Value) or 0
-    elseif not self.SrcWorks and self.OverclockTouched then
-        value = self.WireOverclock
-    end
-
-    return ACFLazers.ClampRadOverclock(value)
-end
-
 function ENT:TriggerInput(name, value)
-    if name == "Overclock" then
-        self.WireOverclock    = tonumber(value) or 0
-        self.OverclockTouched = true
-    elseif name == "Flush" then
+    if name == "Flush" then
         local v = tonumber(value) or 0 -- [CHANGED 1] anything above 0 vents the coolant (text counts as 0; NaN is not above 0)
 
         self.FlushWire = v > 0
@@ -324,8 +302,7 @@ function ENT:Initialize()
     self.MembersDirty   = true
     self.NextRefresh    = 0
     self.HasContraption = false
-    self.Overclock      = CFG.RadOverclockDefault
-    self.NominalSap     = 0       -- kJ/s it tries to take out (sap rate x overclock), as of the last sweep
+    self.NominalSap     = 0       -- kJ/s it tries to take out (sap rate x the strength its tank gives it), as of the last sweep
     self.Attempted      = 0       -- kJ/s of work it really did in the last sweep (less than nominal when the parts around it are nearly cold)
     self.SapRate        = 0       -- kJ/s it really took out (the work x its efficiency)
     self.Efficiency     = 1
@@ -335,7 +312,6 @@ function ENT:Initialize()
     self.Status         = "Not set up yet"
     self.StatusKind     = "new"
     self.OverlaySig     = ""
-    self.HeatDying      = false
 
     -- [CHANGED 1] the coolant tank. ApplyData sizes it (Capacity, litres) and fills it (Amount, litres). The names Amount / Capacity / GetUnitMass / Consume are the ones ACF's SUPPLY CRATE
     -- looks for in its list of fuel tanks (ACF.FuelTanks, entities/acf_supply/modules/supply.lua): being in that list is all it takes to be topped up by a supply crate.
@@ -356,7 +332,7 @@ function ENT:Initialize()
     Rad.GroupsDirty = true
 
     if WireLib then
-        WireLib.CreateInputs(self, { "Overclock", "Flush" })
+        WireLib.CreateInputs(self, { "Flush" })
         WireLib.CreateOutputs(self, {
             "SapRate",    -- kJ per second it really takes out
             "Attempted",  -- kJ per second it tries to take out
@@ -367,7 +343,7 @@ function ENT:Initialize()
             "Radius",     -- units
             "HeatKJ",     -- kJ of heat above room temperature
             "HeatF",      -- temperature in Fahrenheit
-            "HeatPct",    -- percent of the HOT temperature (100 = HOT, above = damaging itself)
+            "HeatPct",    -- percent of the HOT temperature (100 = HOT; a radiator takes no damage from heat, [CHANGED 2] 15.4)
             "Coolant",    -- litres of coolant in the tank
             "CoolantPct", -- percent full
             "Flushing"    -- 1 while it is venting
@@ -520,7 +496,35 @@ function ENT:GetFill()
     return self.Amount / self.Capacity
 end
 
---- Starts or stops the steam: the network flag the client draws the cloud from, the burst, and the hiss that goes on while it vents.
+-- A sound patch that starts at once at this volume and pitch (nil when there is no sound to play). [CHANGED 2] Both steam sounds are patches, so both can be faded out: a burst made with
+-- EmitSound cannot be turned down, and the HL2 steam sound is several seconds long.
+local function StartSound(ent, name, volume, pitch)
+    if not (isstring(name) and name ~= "") then return nil end
+
+    local snd = CreateSound(ent, name)
+
+    if not snd then return nil end
+
+    snd:SetSoundLevel(75)
+    snd:PlayEx(volume, pitch)
+
+    return snd
+end
+
+-- Fades a sound out over `seconds` and then stops it for good (FadeOut only turns the volume down over the time; the Stop after it makes sure nothing is left playing).
+local function FadeOutSound(snd, seconds)
+    if not snd then return end
+
+    if seconds > 0 then
+        snd:FadeOut(seconds)
+
+        timer.Simple(seconds + 0.1, function() snd:Stop() end)
+    else
+        snd:Stop()
+    end
+end
+
+--- Starts or stops the steam: the network flag the client draws the cloud from, the burst, and the hiss that goes on while it vents. When it stops both sounds fade out (RadFlushFadeSeconds).
 function ENT:SetVenting(on)
     on = on and true or false
 
@@ -529,22 +533,19 @@ function ENT:SetVenting(on)
     self.Venting = on
     self:SetNW2Bool("ACFRadVent", on)
 
-    local pitch  = math.floor(ACFLazers.GetRadFlushPitch(self:GetWidth()) + 0.5)
-    local volume = ACFLazers.ClampNumber(CFG.RadFlushVolume, 0.9, 0, 1)
-
     if on then
-        local burst, loop = CFG.RadFlushStartSound, CFG.RadFlushLoopSound
+        local pitch  = math.floor(ACFLazers.GetRadFlushPitch(self:GetWidth()) + 0.5)
+        local volume = ACFLazers.ClampNumber(CFG.RadFlushVolume, 0.9, 0, 1)
 
-        if isstring(burst) and burst ~= "" then self:EmitSound(burst, 75, pitch, volume) end
+        self.VentBurst = StartSound(self, CFG.RadFlushStartSound, volume, pitch)
+        self.VentSound = StartSound(self, CFG.RadFlushLoopSound, volume, pitch) -- (a new pair is made at every flush: the ones that are fading out are left to finish)
+    else
+        local fade = ACFLazers.ClampNumber(CFG.RadFlushFadeSeconds, 0.8, 0, 10)
 
-        if isstring(loop) and loop ~= "" then
-            self.VentSound = self.VentSound or CreateSound(self, loop)
+        FadeOutSound(self.VentBurst, fade)
+        FadeOutSound(self.VentSound, fade)
 
-            if self.VentSound then self.VentSound:PlayEx(volume, pitch) end
-        end
-    elseif self.VentSound then
-        self.VentSound:FadeOut(0.4)
-        self.VentSound = nil -- (a new sound is made at the next flush: no doubt about playing one that faded out)
+        self.VentBurst, self.VentSound = nil, nil
     end
 end
 
@@ -570,40 +571,8 @@ function ENT:GetHeatPct()
     return Heat.GetPctHot(self)
 end
 
--- Over its limit the radiator hurts itself: RadDamage percent of its max health per second at twice the limit, growing with the square of how far over it is. It goes through ACF's
--- damage pipeline (Heat.Hurt), so ACF's own rules apply; a kill makes it die like a prop killed by a bullet.
-function ENT:HeatThink(dt)
-    local over = self:GetHeatPct() - 1
-
-    if over <= 0 or dt <= 0 or self.HeatDying then return end
-
-    local acf = self.ACF
-
-    if not (acf and acf.MaxHealth and acf.MaxHealth > 0) then return end
-
-    local HitRes = Heat.Hurt(self, acf.MaxHealth * ACFLazers.GetHeatDamagePct(over, CFG.RadDamage) / 100 * dt)
-
-    if HitRes and HitRes.Kill then self:HeatDeath() end
-end
-
-function ENT:HeatDeath()
-    if self.HeatDying then return end
-
-    self.HeatDying = true
-
-    Rad.GroupsDirty = true
-
-    local dmgInfo = Objects.DamageInfo(Heat.GetAttacker(self), self)
-
-    ACF.APKill(self, VectorRand(), math.min(CFG.HeatDeathDebrisPower, CFG.MaxDebrisPower), dmgInfo)
-end
-
--- The end of a sweep for this radiator: its own damage, the one-line state, the wire outputs and the hover text.
-function ENT:Finish(dt)
-    self:HeatThink(dt)
-
-    if self.HeatDying or not IsValid(self) then return end
-
+-- The end of a sweep for this radiator: the one-line state, the wire outputs and the hover text.
+function ENT:Finish()
     self:UpdateStatus()
     self:UpdateWireOutputs()
     self:RefreshOverlay()
@@ -613,12 +582,7 @@ end
 
 -- The one-line state for the hover text, and a short key for it (the hover text only refreshes when something worth showing changed).
 function ENT:UpdateStatus()
-    local pct = self:GetHeatPct()
-
-    if pct > 1 then
-        self.StatusKind = "over"
-        self.Status     = string.format("OVER ITS LIMIT (%.0f%% of HOT): it is damaging itself. Lower the overclock or link more radiators", pct * 100)
-    elseif not self.CFW_GetContraption then
+    if not self.CFW_GetContraption then
         self.StatusKind = "nocfw"
         self.Status     = "ACF's contraption tracking (CFW) was not found: nothing can be cooled"
     elseif not self.HasContraption then
@@ -627,9 +591,6 @@ function ENT:UpdateStatus()
     elseif self.Venting then
         self.StatusKind = "vent"
         self.Status     = string.format("FLUSHING: venting %.1f L/s of coolant, %.0f kJ/s of heat leaves with it", self.VentRate, self.PoolBoil)
-    elseif self.Overclock <= 0 then
-        self.StatusKind = "off"
-        self.Status     = "Overclock input is 0: switched off"
     elseif self.Capacity > 0 and self.Amount <= 0 then
         self.StatusKind = "dry"
         self.Status     = string.format("OUT OF COOLANT: working at %.0f%% strength. A supply crate refills it", ACFLazers.GetRadCoolantMult(0) * 100)
@@ -668,7 +629,7 @@ end
 
 -- The hover text (ACF's overlay system calls this; ENT:UpdateOverlay() asks it to refresh).
 function ENT:ACF_UpdateOverlayState(State)
-    if self.StatusKind == "over" or self.StatusKind == "dry" then
+    if self.StatusKind == "dry" then
         State:AddError(self.Status)
     elseif self.StatusKind == "work" then
         State:AddSuccess(self.Status)
@@ -682,8 +643,7 @@ function ENT:ACF_UpdateOverlayState(State)
 
     State:AddKeyValue("Size", string.format("%d units wide (model scale %.2f), %d kg", width, ACFLazers.GetRadScale(width), ACFLazers.GetRadMass(width)))
     State:AddKeyValue("Radius", string.format("%.0f units, %d parts in range", ACFLazers.GetRadRadius(width), self.MemberCount))
-    State:AddKeyValue("Sap rate", string.format("%.0f kJ/s at overclock 1", ACFLazers.GetRadSap(width)))
-    State:AddKeyValue("Overclock", string.format("x%.2f (%.0f kJ/s tried)", self.Overclock, self.NominalSap))
+    State:AddKeyValue("Sap rate", string.format("%.0f kJ/s with a full tank (%.0f kJ/s tried now)", ACFLazers.GetRadSap(width), self.NominalSap))
     State:AddKeyValue("Taking out", string.format("%.0f kJ/s (efficiency %.0f%%)", self.SapRate, self.Efficiency * 100))
     State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of HOT)", Heat.GetTempF(self), self:GetHeatPct() * 100))
 
@@ -706,7 +666,6 @@ function ENT:RefreshOverlay()
         self.MemberCount,
         self.HotParts,
         self.PoolSize,
-        math.floor(self.Overclock * 10),
         math.floor(self:GetFill() * 20),                                      -- [CHANGED 1] the tank in steps of 5% (venting shows in StatusKind)
     }, "|")
 
@@ -776,9 +735,11 @@ function ENT:OnRemove()
 
     if ACF.FuelTanks then ACF.FuelTanks[self] = nil end -- [CHANGED 1] the supply crate forgets it
 
-    if self.VentSound then
-        self.VentSound:Stop()
-        self.VentSound = nil
+    for _, key in ipairs({ "VentBurst", "VentSound" }) do -- [CHANGED 2] a radiator that goes while it vents takes its sounds with it, at once
+        if self[key] then
+            self[key]:Stop()
+            self[key] = nil
+        end
     end
 
     ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1

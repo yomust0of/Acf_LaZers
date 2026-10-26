@@ -1,5 +1,5 @@
 -- =========================================================================
--- NEW (15.2), CHANGED (15.3). Goes to:  lua/weapons/gmod_tool/stools/acf_radiator_tool.lua
+-- NEW (15.2), CHANGED (15.3, 15.4). Goes to:  lua/weapons/gmod_tool/stools/acf_radiator_tool.lua
 --
 -- THE RADIATOR TOOL (based on the generator tool).
 --   Left-click        spawn a radiator with the slider's width and the colour of the coolant (the colour picker), or update the radiator you are aiming at. The width sets the model scale,
@@ -13,6 +13,7 @@
 -- While THIS tool is out, look at any part within RadReadoutDistance units: its temperature is shown next to the crosshair (plain props have no hover text of their own).
 -- All the numbers on the screen come from ACFLazers.GetRadReadout in the config, so the tool cannot disagree with the radiator.
 -- (15.3) The coolant colour is the colour of the steam a radiator vents when its Flush wire input is on. The readout also shows the size of the tank and how fast a flush empties it.
+-- (15.4) No overclock any more: the readout shows what the radiator takes out and where its own heat settles when it works flat out.
 -- =========================================================================
 
 TOOL.Category = "ACF - LaZers"
@@ -22,8 +23,8 @@ TOOL.Name = "Radiator Spawner"
 local Config = ACFLazers and ACFLazers.Config
 assert(Config, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is missing or did not load")
 assert(ACFLazers.LinkKit, "[acf_radiator_tool] lua/autorun/acf_lazers_linkkit.lua is missing or did not load")
-assert(ACFLazers.GetRadReadout, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator helpers). Copy the config of the same batch (15.3).")
-assert(ACFLazers.GetRadCoolantCapacity, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no coolant helpers). Copy the config of the same batch (15.3).")
+assert(ACFLazers.GetRadReadout, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator helpers). Copy the config of the same batch (15.4).")
+assert(ACFLazers.GetRadCoolantCapacity, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no coolant helpers). Copy the config of the same batch (15.4).")
 
 TOOL.ClientConVar["width"]   = Config.RadWidthDefault
 TOOL.ClientConVar["celsius"] = 0
@@ -124,19 +125,13 @@ if CLIENT then
         _, lh = draw.SimpleText(string.format("%d units wide, %d kg, radius %d", show.width, show.mass, math.floor(show.radius + 0.5)), "ACFLazersRadSmall", cx, y, ColWhite, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
         y = y + lh + 1
 
-        _, lh = draw.SimpleText(string.format("at x1 its own heat settles at %d%% of HOT", math.floor(show.one.settle * 100 + 0.5)), "ACFLazersRadSmall", cx, y, ColWhite, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
+        _, lh = draw.SimpleText(string.format("working flat out its own heat settles at %d%% of HOT", math.floor(show.settle * 100 + 0.5)), "ACFLazersRadSmall", cx, y, ColWhite, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
         y = y + lh + 1
 
-        _, lh = draw.SimpleText(string.format("best overclock x%.1f: %s kJ/s", show.best.x, Commas(show.best.net)), "ACFLazersRadSmall", cx, y, ColAmber, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
-        y = y + lh + 1
-
-        if show.dieAt then
-            _, lh = draw.SimpleText(string.format("from x%.2f it damages itself", show.dieAt), "ACFLazersRadSmall", cx, y, ColHurt, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
-        else
-            _, lh = draw.SimpleText(string.format("it survives x%g (the most)", Config.RadOverclockMax), "ACFLazersRadSmall", cx, y, ColGrey, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
+        if show.eff < 0.999 then
+            _, lh = draw.SimpleText(string.format("there it works at %d%% efficiency: %s kJ/s", math.floor(show.eff * 100 + 0.5), Commas(show.net)), "ACFLazersRadSmall", cx, y, ColAmber, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
+            y = y + lh + 1
         end
-
-        y = y + lh + 1
 
         if show.liters and show.liters > 0 then
             -- [CHANGED 1] the tank, in the colour of its steam
@@ -175,7 +170,7 @@ if CLIENT then
 
         function box:Paint(w, h)
             draw.RoundedBox(8, 0, 0, w, h, ColBack)
-            DrawReadout(Readout(), w, 6, "HEAT TAKEN OUT PER SECOND (OVERCLOCK 1)")
+            DrawReadout(Readout(), w, 6, "HEAT TAKEN OUT PER SECOND")
         end
 
         panel:AddItem(box)
@@ -198,19 +193,13 @@ if CLIENT then
             local show = Readout()
 
             if IsValid(info) then
-                local lines = {}
-
-                for _, row in ipairs(show.rows) do
-                    lines[#lines + 1] = string.format("x%d: settles at %d%% of HOT, efficiency %d%%, takes out %s kJ/s%s", row.x, math.floor(row.settle * 100 + 0.5), math.floor(row.eff * 100 + 0.5), Commas(row.net), row.dies and " (and damages itself)" or "")
-                end
-
                 info:SetText(string.format("A radiator %d units wide: model scale %.2f, mass %d kg, radius %d units. It takes up to %s kJ/s out of the hot parts of its own contraption that are inside its radius, "
-                    .. "the hottest parts giving the most. Working makes waste heat (%.1f%% of the work it tries to do); from %d%% of HOT its efficiency falls to %d%% at 100%%, and over 100%% it damages itself. "
-                    .. "The Overclock wire input multiplies the rate (up to x%g). Where it settles:\n%s\n\n"
+                    .. "the hottest parts giving the most. Working makes waste heat (%.1f%% of the work it tries to do); from %d%% of HOT its efficiency falls to %d%% at 100%%. It never damages itself from heat, "
+                    .. "and it sheds its own heat %g times as fast as a prop. Working flat out its own heat settles at %d%% of HOT.\n\n"
                     .. "Coolant: the tank holds %.1f litres. A full tank is full strength, an empty one works at %d%%. The Flush wire input vents %.1f litres a second as a cloud of steam in the colour above "
                     .. "and takes %s kJ/s of heat out of the hot parts on top. A supply crate refills the tank like a fuel tank.",
-                    show.width, show.scale, show.mass, math.floor(show.radius + 0.5), Commas(show.sap), show.wasteFrac * 100, Config.RadEffStartPct, Config.RadEffFloorPct, Config.RadOverclockMax, table.concat(lines, "\n"),
-                    show.liters, math.floor(ACFLazers.GetRadCoolantMult(0) * 100 + 0.5), show.flushRate, Commas(show.flushKJ)))
+                    show.width, show.scale, show.mass, math.floor(show.radius + 0.5), Commas(show.sap), show.wasteFrac * 100, Config.RadEffStartPct, Config.RadEffFloorPct, Config.HeatCoolMultRad,
+                    math.floor(show.settle * 100 + 0.5), show.liters, math.floor(ACFLazers.GetRadCoolantMult(0) * 100 + 0.5), show.flushRate, Commas(show.flushKJ)))
             end
         end
 

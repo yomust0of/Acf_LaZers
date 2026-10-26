@@ -23,6 +23,14 @@
 --   10 (15.3) HOT LAZERS SET PLAYERS ON FIRE: the HeatIgnite... knobs, and the pure box test ObbTouchesAabb the heat file uses.
 --   11 (15.3) THE COOLANT: the Rad...Coolant... / RadFlush... / RadPuff... knobs (tank size, how the tank changes the cooling, the flush, the steam, the sounds) and the helpers
 --      GetRadCoolantCapacity, GetRadFlushRate, GetRadCoolantMult, ClampRadColor. GetRadReadout also reports the tank.
+--   12 (15.4) COOLING: HeatCoolTau is 300 again and the new multiplier HeatCoolSpeed (1.25) sits on top: natural cooling is 1.25 times the speed of 15.2 (15.3 had 2 times). Radiators shed their
+--      own heat HeatCoolMultRad (5) times as fast as a prop. ACFLazers.GetHeatCoolRate is the one place the rate is worked out.
+--   13 (15.4) NO MORE OVERCLOCK: RadOverclockDefault, RadOverclockMax and RadDamage are gone (a radiator never hurts itself from heat), ClampRadOverclock is gone, GetRadReadout has no overclock
+--      rows. The heat a radiator eats per second is RadSapSmall / RadSapBig (5 times what 15.3 had).
+--   14 (15.4) THE FLUSH IS A HEAT OBLITERATOR: RadFlushKJPerLiter is 125000 (three 12-wide radiators flushing for 2 seconds take a 100 mm lazer from 115% to 25%). The sounds FADE OUT
+--      (RadFlushFadeSeconds), the burst included.
+--   15 (15.4) STEAM: RadPuffMaterial is now RadPuffMaterials, a list of ACF's own smoke sprites (the old guess had no texture). ACFLazers.PickRadPuffMaterial picks one.
+--   16 (15.4) HeatIgniteSeated: a player sitting in a vehicle is not set on fire by a hot lazer (the crew of the vehicle the lazer is on).
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -341,7 +349,7 @@ table.Merge(ACFLazers.Config, {
     --   * a lazer that is firing heats ITSELF          (the kJ it spends x HeatLazerSmall .. HeatLazerBig)
     --   * a lazer BEAM heats the props it hits          (the same heat rate x HeatHitSmall .. HeatHitBig, weakened by focus / angle / burn-through exactly like the damage is)
     --   * a capacitor heats when energy goes in OR out  (kJ moved x HeatCapSmall .. HeatCapBig). A generator hub heats when it makes energy (kJ made x HeatGenSmall .. HeatGenBig)
-    -- Everything cools back down by itself (HeatCoolTau below). The temperature players see is always Fahrenheit, and every temperature typed in this block is Fahrenheit too.
+    -- Everything cools back down by itself (HeatCoolTau and HeatCoolSpeed below). The temperature players see is always Fahrenheit, and every temperature typed in this block is Fahrenheit too.
     -- "Small .. Big" pairs: the Small number is for the smallest size of that thing (CaliberMin lazer, CapDiameterMin capacitor, GenHPMin hub), the Big number for the biggest, a straight line between.
     HeatSpecificHeat    = 0.49,   -- kJ per kg per kelvin: the energy that warms 1 kg by 1 K. 0.49 = steel [KNOW]. Higher = every entity needs more kJ per degree (heat sources warm things more slowly)
     HeatMinMassKg       = 1,      -- kg. An entity with no (or a tiny) physics mass counts as at least this much, so the maths never divides by zero
@@ -353,13 +361,15 @@ table.Merge(ACFLazers.Config, {
     HeatPenGate         = true,   -- true = a beam burns THROUGH a plate only if the plate is HOT (100% or more) AND the old armour test allows it (armour under 1/3 x caliber x damage multiplier).
     --                               A destroyed plate always lets the beam through. false = the old rule alone (heat never matters for burn-through)
 
-    -- COOLING. Every entity cools toward room temperature by itself:  loss per second = excess x a x (1 + HeatCoolHotBoost x excess / the HOT excess),  a = multiplier / HeatCoolTau.
-    -- That is an ordinary exponential cooling (time constant HeatCoolTau) that cools faster the hotter the thing is: at the HOT temperature it cools (1 + HeatCoolHotBoost) times as fast.
-    -- All props cool at the same rate. Lazers and the other ACF entities (capacitors, generators ...) have a multiplier of their own, relative to props.
-    HeatCoolTau         = 150,    -- seconds. The base cooling time constant of every prop: after this long a mildly warm prop has lost 63% of its excess heat. Lower = cools faster [CHANGED 7] (15.3: was 300, so everything now cools twice as fast)
+    -- COOLING. Every entity cools toward room temperature by itself:  loss per second = excess x a x (1 + HeatCoolHotBoost x excess / the HOT excess),  a = multiplier x HeatCoolSpeed / HeatCoolTau.
+    -- That is an ordinary exponential cooling (time constant HeatCoolTau / HeatCoolSpeed) that cools faster the hotter the thing is: at the HOT temperature it cools (1 + HeatCoolHotBoost) times as fast.
+    -- All props cool at the same rate. Lazers, radiators and the other ACF entities (capacitors, generators ...) have a multiplier of their own, relative to props.
+    HeatCoolTau         = 300,    -- seconds. The base cooling time constant (the speed of 15.2): after this long a mildly warm prop has lost 63% of its excess heat. Leave it alone and use HeatCoolSpeed
+    HeatCoolSpeed       = 1.25,   -- [CHANGED 12] (15.4) THE multiplier on every natural cooling, relative to the speed of 15.2: 1 = 15.2 (300 s), 2 = what 15.3 had (150 s), 1.25 = 240 s. Lower = everything cools more slowly
     HeatCoolHotBoost    = 1,      -- extra cooling at the HOT temperature, as a multiple of the base (0 = plain exponential at every temperature, 1 = twice as fast at HOT, 3 = four times)
     HeatCoolMultLazer   = 1,      -- cooling speed of lazers relative to props (2 = twice as fast)
     HeatCoolMultACF     = 1,      -- cooling speed of every OTHER ACF entity (capacitors, generators ...) relative to props
+    HeatCoolMultRad     = 5,      -- [CHANGED 12] (15.4) cooling speed of RADIATORS relative to props (5 = five times as fast): a radiator sheds its own waste heat quickly
 
     -- BOOKKEEPING (nothing to tune unless you are chasing lag)
     HeatForgetBelowK    = 0.5,    -- kelvin above room temperature. A cooling entity this close to room temperature is forgotten (it costs nothing again)
@@ -396,7 +406,7 @@ table.Merge(ACFLazers.Config, {
     HeatCapDamage       = 4,      -- percent of the capacitor's MAX HEALTH lost per second at twice its critical heat (200%), growing with the square of how far over it is. 0 = never
 
 
-    -- TURBO DAMAGE. [CHANGED 9] Anything that damages itself from heat (lazers, capacitors, radiators) takes its normal quadratic damage (the HeatLazerDamage / HeatCapDamage / RadDamage knobs)
+    -- TURBO DAMAGE. [CHANGED 9] Anything that damages itself from heat (lazers, capacitors; radiators no longer do) takes its normal quadratic damage (the HeatLazerDamage / HeatCapDamage knobs)
     -- AND, once it is past HeatTurboStartPct of its own limit, this on top: HeatTurboPct percent of its MAX HEALTH per second at exactly that temperature, growing with
     -- (how hot / HeatTurboStartPct) ^ HeatTurboPower. With the defaults: 120% = 20% per second (dead in 5 s), 130% = 33% (3 s), 150% = 77% (1.3 s), 200% = 430% (a fraction of a second).
     -- It is a cliff on purpose: below the start it is not there at all. A thing whose own damage knob is 0 ("never hurts itself") takes no turbo damage either.
@@ -406,12 +416,14 @@ table.Merge(ACFLazers.Config, {
 
     -- LAZERS SET PLAYERS ON FIRE. [CHANGED 10] A lazer (any class in HeatIgniteClasses) that is at least HeatIgniteF hot sets every player on fire whose body box touches the lazer's box.
     -- The fire is put out HeatIgniteLinger seconds after the player stops touching a hot lazer (or when the lazer cools under HeatIgniteF).
+    -- [CHANGED 16] (15.4) A player SITTING IN A VEHICLE (a seat, a pod, a driver seat: whatever Player:InVehicle() counts) is the crew of what the lazer is on and is left alone (HeatIgniteSeated).
     HeatIgniteF         = 500,    -- degrees Fahrenheit. A lazer at or above this ignites players that touch it
     HeatIgniteLinger    = 1,      -- seconds the fire goes on after the player gets off the lazer
     HeatIgniteReach     = 0,      -- units. The lazer's box is grown by this much on every side before the touch test (0 = real contact only)
     HeatIgniteInterval  = 0.1,    -- seconds between the touch checks (one timer for every lazer and player)
     HeatIgniteLife      = 5,      -- seconds a fire we light is lit for in one go. We put it out ourselves at the linger time; this only matters if the check ever stopped running
     HeatIgniteClasses   = { acf_lazer = true }, -- which entities ignite players. Add acf_capacitor = true, acf_radiator = true ... if you want those to burn people too
+    HeatIgniteSeated    = false, -- [CHANGED 16] false = a player sitting in a vehicle is never set on fire by a lazer (they only burn outside the vehicle); true = they burn like everyone else
 
     -- TESTING AID
     HeatInfoDistance    = 4096,   -- units. The console command acf_lazers_heat_info prints the heat of whatever you are looking at, up to this far away
@@ -424,11 +436,11 @@ table.Merge(ACFLazers.Config, {
     --   * WHO GETS COOLED MOST: the heat is taken in proportion to how hot each part is (its temperature above room temperature ^ RadWeightPower), so a plate cooked by a lazer gives up the
     --     lion's share and the lazer behind it gets less. A part can never be cooled below room temperature: what it cannot give goes to the others
     --   * POOLS: radiators linked to each other (the link tools, right-click) are ONE pool: one combined member list (a part in range of two of them is ONE member, never cooled twice) and the
-    --     sum of their sap rates. Each radiator still has its own heat, overclock and efficiency
+    --     sum of their sap rates. Each radiator still has its own heat and efficiency
     --   * THE RADIATOR'S OWN HEAT: working makes waste heat (RadWasteSmall .. RadWasteBig x the work it tries to do). Its 100% is the HOT temperature (HeatHotF), like a plate. It cools by itself
-    --     like any ACF entity (HeatCoolMultACF). Up to RadEffStartPct it works at full efficiency; from there its efficiency falls in a straight line to RadEffFloorPct at 100%; over 100% it
-    --     damages itself (RadDamage) until it dies. The waste comes from the work it TRIES to do, not from what it removes: a radiator that loses efficiency does not cool itself down by it
-    --   * OVERCLOCK (wire input): multiplies the sap rate (and the waste). 1 = normal, 0 = off, up to RadOverclockMax. Past about 3 to 4 the extra rate costs more efficiency than it gains
+    --     (HeatCoolMultRad times as fast as a prop). Up to RadEffStartPct it works at full efficiency; from there its efficiency falls in a straight line to RadEffFloorPct at 100%, and it stays at
+    --     that floor above 100%. [CHANGED 13] (15.4) A radiator NEVER hurts itself from heat (RadDamage is gone), and there is no overclock: the heat it eats per second is RadSapSmall .. RadSapBig.
+    --     The waste comes from the work it TRIES to do, not from what it removes: a radiator that loses efficiency does not cool itself down by it
     -- "Small .. Big" pairs: the Small number is for the narrowest radiator (RadWidthMin), the Big number for the widest (RadWidthMax), in between along the size (see each knob).
     RadModel          = "models/lasers/heatsink.mdl", -- your model: a squished cube 42 wide x 42 long x 30 tall at scale 1. If the file is missing the radiator refuses to spawn and says so
     RadModelWidth     = 42,     -- units. The width (and length) of that model at scale 1. The tool slider is the WIDTH in units, and the model scale is width / this
@@ -441,23 +453,20 @@ table.Merge(ACFLazers.Config, {
     RadArmourAtOne    = 40,     -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod)
     RadHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
     RadMaxPerPlayer   = 10,     -- default for the server variable sbox_maxacf_radiators (how many radiators one player may have)
-    -- REACH AND RATE. Radius runs in a straight line along the width. The sap rate is the heat one radiator takes out per second at overclock 1 (the "scalar" for how much heat it can eat).
+    -- REACH AND RATE. Radius runs in a straight line along the width. The sap rate is the heat one radiator takes out per second (the "scalar" for how much heat it can eat).
     RadRadiusSmall    = 300,    -- units, for RadWidthMin
     RadRadiusBig      = 800,    -- units, for RadWidthMax
-    RadSapSmall       = 300,    -- kJ per second for RadWidthMin at overclock 1
-    RadSapBig         = 25000,  -- kJ per second for RadWidthMax at overclock 1. [GUESS] about what one 100 to 160 mm lazer makes as heat with HeatLazer 5 (16,500 to 32,600 kJ/s). Link radiators into a pool for more: a 300 mm lazer makes 200,000
+    RadSapSmall       = 1500,   -- [CHANGED 13] (15.4: 5 times the 300 of 15.3, and there is no overclock any more) kJ per second for RadWidthMin
+    RadSapBig         = 125000, -- [CHANGED 13] (15.4: 5 times the 25,000 of 15.3) kJ per second for RadWidthMax. Link radiators into a pool for more
     RadSapCurve       = 1,      -- how the sap rate runs between the two: 0 = a straight line, 1 = the same power law as the mass (default), in between = a mix. With 1 a radiator of any width settles at a
     --                             similar share of its own limit; with 0 the middle widths eat a lot more than their mass can take (they run hot). Clamped to 0 .. 1
     RadWeightPower    = 1,      -- how much hotter parts are favoured: a part's share of the cooling is (its temperature above room temperature) ^ this. 0 = everyone gives equally, 1 = in proportion
     --                             to temperature (default), 2 = the hottest part takes far more
-    -- OVERCLOCK
-    RadOverclockDefault = 1,    -- what the Overclock input counts as while nothing is wired to it
-    RadOverclockMax   = 6,      -- the largest overclock; the wire value is clamped to 0 .. this (0 = the radiator is off)
+    -- THE RADIATOR'S OWN HEAT
     RadWasteSmall     = 0.01,   -- waste heat the radiator makes, as a share of the kJ it TRIES to remove (0.01 = 1%). Small: the narrowest radiator ...
-    RadWasteBig       = 0.01,   -- ... and the widest. One knob per end because the small ones carry overclock far better than the big ones (a big one at the default dies at 5x)
+    RadWasteBig       = 0.01,   -- ... and the widest. One knob per end so the two can be tuned apart
     RadEffStartPct    = 50,     -- percent of HOT where the radiator's efficiency starts to fall (below this it is 100%)
     RadEffFloorPct    = 40,     -- the efficiency (percent) it has fallen to at 100% of HOT, and keeps above that
-    RadDamage         = 4,      -- percent of the radiator's MAX HEALTH lost per second at twice its limit (200% of HOT), growing with the square of how far over it is. 0 = it never hurts itself
     -- BOOKKEEPING
     RadSweepInterval  = 0.25,   -- seconds between the radiators' work (one timer for all of them). A radiator takes (rate x the time since the last one) out each time
     RadMaxDeltaTime   = 1,      -- seconds. The longest "time since the last sweep" it will act for (a lag spike cannot turn into one huge bite)
@@ -486,7 +495,8 @@ table.Merge(ACFLazers.Config, {
     RadDryPct           = 25,     -- percent of its sap rate a radiator works at with an EMPTY tank. Between empty and full it is a straight line
     RadFlushFraction    = 0.5,    -- a flush vents this share of a FULL tank ...
     RadFlushSeconds     = 5,      -- ... in this many seconds (default: half the tank in 5 s, the whole tank in 10 s; the speed is the same whatever the level, so a half-full tank empties in 5 s)
-    RadFlushKJPerLiter  = 2260,   -- kJ of heat each litre vented takes out of the hot parts of the pool (2260 = what it takes to boil a litre of water to steam [KNOW]). 0 = the flush takes no heat
+    RadFlushKJPerLiter  = 125000,  -- [CHANGED 14] (15.4: was 2260, the boiling heat of water) kJ of heat each litre vented takes out of the hot parts around it. A HEAT OBLITERATOR on purpose: three 12-wide radiators
+    --                             flushing for 2 seconds take a 100 mm lazer from 115% to 25% (sim/calib154.lua works it out; the radiators' own cooling is in that too). 0 = the flush takes no heat
     RadFlushPool        = false,  -- false = each radiator only flushes on its own Flush input; true = the Flush input of one radiator flushes EVERY radiator linked to it (the pool)
     RadCoolantColor     = { 90, 220, 150 }, -- red, green, blue of the coolant when the tool does not say (it is the starting colour of the tool's colour picker)
     RadPuffsPerSecond   = 45,     -- particles of steam per second while a radiator of scale 1 vents (bigger radiators puff more)
@@ -495,10 +505,13 @@ table.Merge(ACFLazers.Config, {
     RadPuffLife         = 1.6,    -- seconds a puff lives
     RadPuffSize         = 12,     -- units. The size of a puff when it is born at scale 1; it grows to 4 times that
     RadPuffSpeed        = 110,    -- units per second the puffs shoot out at (scale 1)
-    RadPuffMaterial     = "particle/particle_smokegrey", -- the sprite of a puff [GUESS] (an HL2 smoke sprite; change it if the puffs are invisible)
+    RadPuffMaterials    = { "particle/smokesprites_0001", "particle/smokesprites_0002", "particle/smokesprites_0003", "particle/smokesprites_0004", "particle/smokesprites_0005",
+                            "particle/smokesprites_0006", "particle/smokesprites_0007", "particle/smokesprites_0008", "particle/smokesprites_0009" }, -- [CHANGED 15] the sprites of the puffs, one picked at random for each.
+    --                             These are the smoke sprites ACF's own explosion and smoke effects use [SEEN acf/effects/acf_smoke.lua, acf_explosion.lua], so they are in every install that runs ACF. A text instead of a list also works
     RadFlushLoopSound   = "ambient/gas/steam_loop1.wav", -- the hissing that goes on while it vents [GUESS] (an HL2 sound; "" = none). Check:  lua_run_cl print(file.Exists("sound/ambient/gas/steam_loop1.wav", "GAME"))
     RadFlushStartSound  = "ambient/gas/steam2.wav",      -- the burst when a flush starts ("" = none)
     RadFlushVolume      = 0.9,    -- 0..1
+    RadFlushFadeSeconds = 0.8,    -- [CHANGED 14] seconds the burst and the hiss take to fade out when the flush ends (0 = they stop at once). Both are stopped for good a moment after the fade
     RadFlushPitchSmall  = 125,    -- the pitch of the hiss of the narrowest radiator (100 = normal) ...
     RadFlushPitchBig    = 80,     -- ... and of the widest
 
@@ -840,8 +853,15 @@ function ACFLazers.GetHeatCapacity(mass)
     return math.max(mass, C.HeatMinMassKg) * C.HeatSpecificHeat
 end
 
+--- The base cooling rate per second of an entity with this cooling multiplier (props 1): mult x HeatCoolSpeed / HeatCoolTau. [CHANGED 12]
+function ACFLazers.GetHeatCoolRate(mult)
+    local C = ACFLazers.Config
+
+    return (tonumber(mult) or 1) * math.max(tonumber(C.HeatCoolSpeed) or 1, 0) / math.max(C.HeatCoolTau, 1e-6)
+end
+
 --- Natural cooling. theta = kelvin above room temperature now, dt = seconds, mult = the cooling multiplier of this kind of entity (props 1). Returns theta after dt.
---- The rule (see HeatCoolTau):  d(theta)/dt = -a x theta x (1 + HeatCoolHotBoost x theta / riseHot),  a = mult / HeatCoolTau.
+--- The rule (see HeatCoolTau):  d(theta)/dt = -a x theta x (1 + HeatCoolHotBoost x theta / riseHot),  a = GetHeatCoolRate(mult) = mult x HeatCoolSpeed / HeatCoolTau.
 --- It has an exact solution, so one call is right for any dt: a long gap costs the same as a short one and cooling in two halves gives the same answer as in one go.
 function ACFLazers.HeatCool(theta, dt, mult)
     local C = ACFLazers.Config
@@ -852,7 +872,10 @@ function ACFLazers.HeatCool(theta, dt, mult)
 
     if mult <= 0 then return theta end
 
-    local a = mult / math.max(C.HeatCoolTau, 1e-6)
+    local a = ACFLazers.GetHeatCoolRate(mult)
+
+    if a <= 0 then return theta end -- (HeatCoolSpeed 0 = nothing cools by itself)
+
     local b = a * math.max(C.HeatCoolHotBoost, 0) / ACFLazers.GetHeatRiseHot()
     local e = math.exp(-a * dt)
 
@@ -1006,7 +1029,7 @@ function ACFLazers.GetRadRadius(width)
     return math.Round(Lerp(ACFLazers.GetRadSizeFraction(width), C.RadRadiusSmall, C.RadRadiusBig))
 end
 
---- kJ per second the radiator tries to take out at overclock 1. RadSapSmall at the narrowest, RadSapBig at the widest; in between a mix of a straight line and the power law (RadSapCurve).
+--- kJ per second the radiator tries to take out (with a full tank). RadSapSmall at the narrowest, RadSapBig at the widest; in between a mix of a straight line and the power law (RadSapCurve).
 function ACFLazers.GetRadSap(width)
     local C      = ACFLazers.Config
     local t      = ACFLazers.GetRadSizeFraction(width)
@@ -1021,17 +1044,6 @@ function ACFLazers.GetRadWaste(width)
     local C = ACFLazers.Config
 
     return math.max(Lerp(ACFLazers.GetRadSizeFraction(width), C.RadWasteSmall, C.RadWasteBig), 0)
-end
-
---- The Overclock wire value made safe: 0 .. RadOverclockMax. Not a number (a broken E2 can send NaN) counts as 0 = off.
-function ACFLazers.ClampRadOverclock(value)
-    local C = ACFLazers.Config
-
-    value = tonumber(value)
-
-    if not value or value ~= value then return 0 end
-
-    return math.Clamp(value, 0, math.max(C.RadOverclockMax, 0))
 end
 
 --- The radiator's efficiency (0..1) at a heat of `pct` (1 = 100% of HOT): full up to RadEffStartPct, a straight line down to RadEffFloorPct at 100%, and that floor above.
@@ -1095,7 +1107,7 @@ function ACFLazers.WeightedFill(weights, limits, total)
     return takes
 end
 
---- One step of a radiator pool. items[i] = { sap = kJ per second radiator i tries to take out (its sap rate x its overclock), eff = its efficiency 0..1 }.
+--- One step of a radiator pool. items[i] = { sap = kJ per second radiator i tries to take out (its sap rate x the strength its tank gives it), eff = its efficiency 0..1 }.
 --- avail = kJ of heat the members hold. dt = seconds. Every radiator tries its full rate; what it really takes out is its rate x its efficiency. When the members hold less than
 --- the radiators could take, all of them do proportionally less work (and so make proportionally less waste).
 --- Returns the total kJ removed, and per item { work = kJ of effort (what the waste is a share of), removed = kJ it took out }.
@@ -1130,7 +1142,7 @@ function ACFLazers.GetCoolingSettleK(waste, capacity, mult)
 
     waste = math.max(tonumber(waste) or 0, 0)
 
-    local a = math.max(tonumber(mult) or 1, 1e-9) / math.max(C.HeatCoolTau, 1e-6)
+    local a = math.max(ACFLazers.GetHeatCoolRate(mult), 1e-12)
     local p = math.max(capacity, 1e-9) * a
     local q = p * math.max(C.HeatCoolHotBoost, 0) / ACFLazers.GetHeatRiseHot()
 
@@ -1139,8 +1151,8 @@ function ACFLazers.GetCoolingSettleK(waste, capacity, mult)
     return (-p + math.sqrt(p * p + 4 * q * waste)) / (2 * q)
 end
 
---- What the tool shows for a width: the numbers of the radiator and how it behaves under overclock. Everything is worked out with the same functions the radiator uses.
---- `settle` = where its own heat levels off (percent of HOT as a fraction, 1 = 100%) when it works flat out for ever; `dies` = that is over 100%, so it would destroy itself.
+--- What the tool shows for a width: the numbers of the radiator. Everything is worked out with the same functions the radiator uses.
+--- `settle` = where its own heat levels off (percent of HOT as a fraction, 1 = 100%) when it works flat out for ever, `eff` = its efficiency there, `net` = the kJ/s it takes out then.
 function ACFLazers.GetRadReadout(width)
     local C        = ACFLazers.Config
     local w        = ACFLazers.ClampRadWidth(width)
@@ -1148,35 +1160,9 @@ function ACFLazers.GetRadReadout(width)
     local capacity = ACFLazers.GetHeatCapacity(mass)
     local sap      = ACFLazers.GetRadSap(w)
     local waste    = ACFLazers.GetRadWaste(w)
-    local riseHot  = ACFLazers.GetHeatRiseHot()
-
-    local function row(x)
-        local attempted = sap * x
-        local settle    = ACFLazers.GetCoolingSettleK(attempted * waste, capacity, C.HeatCoolMultACF) / riseHot
-        local eff       = ACFLazers.GetRadEfficiency(settle)
-
-        return { x = x, attempted = attempted, wasteRate = attempted * waste, settle = settle, eff = eff, net = attempted * eff, dies = settle > 1 }
-    end
-
-    local show = { width = w, scale = ACFLazers.GetRadScale(w), mass = mass, capacity = capacity, radius = ACFLazers.GetRadRadius(w), sap = sap, wasteFrac = waste, one = row(1), rows = {} }
-    local top  = math.max(C.RadOverclockMax, 0)
-
-    for x = 1, math.floor(top) do show.rows[#show.rows + 1] = row(x) end
-
-    -- the overclock with the most net removal that does not destroy the radiator, and the lowest one that does (steps of 0.05)
-    local best = row(math.min(1, top))
-
-    for step = 0, math.floor(top / 0.05 + 0.5) do
-        local candidate = row(step * 0.05)
-
-        if candidate.dies then
-            show.dieAt = show.dieAt or candidate.x
-        elseif candidate.net > best.net then
-            best = candidate
-        end
-    end
-
-    show.best = best
+    local settle   = ACFLazers.GetCoolingSettleK(sap * waste, capacity, C.HeatCoolMultRad) / ACFLazers.GetHeatRiseHot()
+    local eff      = ACFLazers.GetRadEfficiency(settle)
+    local show     = { width = w, scale = ACFLazers.GetRadScale(w), mass = mass, capacity = capacity, radius = ACFLazers.GetRadRadius(w), sap = sap, wasteFrac = waste, settle = settle, eff = eff, net = sap * eff }
 
     -- [CHANGED 11] the tank: litres, how fast a flush empties it, and the extra kJ/s a flush takes out of the hot parts while it lasts
     show.liters    = ACFLazers.GetRadCoolantCapacity(w)
@@ -1223,6 +1209,25 @@ function ACFLazers.ClampRadColor(r, g, b)
     return math.Round(ACFLazers.ClampNumber(r, tonumber(d[1]) or 90, 0, 255)),
            math.Round(ACFLazers.ClampNumber(g, tonumber(d[2]) or 220, 0, 255)),
            math.Round(ACFLazers.ClampNumber(b, tonumber(d[3]) or 150, 0, 255))
+end
+
+-- The sprites ACF's own smoke effects use: what a bad RadPuffMaterials falls back to.
+local RAD_PUFF_DEFAULT = { "particle/smokesprites_0001", "particle/smokesprites_0002", "particle/smokesprites_0003", "particle/smokesprites_0004", "particle/smokesprites_0005",
+                           "particle/smokesprites_0006", "particle/smokesprites_0007", "particle/smokesprites_0008", "particle/smokesprites_0009" }
+
+--- The sprite of one puff: a pick from RadPuffMaterials (`r` is a random number from 0 up to 1, so the pick can be tested). A text instead of a list is that one sprite; a knob that is not
+--- a list, an empty list, or an entry that is not a text falls back to ACF's own smoke sprites.
+function ACFLazers.PickRadPuffMaterial(r)
+    local list = ACFLazers.Config.RadPuffMaterials
+
+    if isstring(list) then list = { list } end
+    if not istable(list) or #list == 0 then list = RAD_PUFF_DEFAULT end
+
+    local entry = list[math.Clamp(1 + math.floor((tonumber(r) or 0) * #list), 1, #list)]
+
+    if isstring(entry) and entry ~= "" then return entry end
+
+    return RAD_PUFF_DEFAULT[1]
 end
 
 --- The pitch (100 = normal) of the steam hiss of a radiator this wide: a straight line from RadFlushPitchSmall (narrowest) to RadFlushPitchBig (widest), kept in the range a sound can have.

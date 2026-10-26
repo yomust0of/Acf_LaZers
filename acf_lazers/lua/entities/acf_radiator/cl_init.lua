@@ -1,8 +1,9 @@
 -- =========================================================================
--- NEW (15.2), CHANGED (15.3). Goes to:  lua/entities/acf_radiator/cl_init.lua
+-- NEW (15.2), CHANGED (15.3, 15.4). Goes to:  lua/entities/acf_radiator/cl_init.lua
 --
 -- THE ACF RADIATOR, client part. It draws the radiator as ACF draws any entity, and it draws the RADIUS: while you hold the toolgun (any tool) and are not sitting in a seat, the
 -- radiator you are aiming at shows a sphere of its radius around it (config RadDrawAimDistance .. RadDrawLines). Nothing is drawn for a radiator you are not aiming at.
+-- 15.4: the puffs use ACF's own smoke sprites (RadPuffMaterials); the steam sounds fade out on the server.
 -- 15.3: while the radiator VENTS (the server sets the network flag ACFRadVent) it throws a cloud of steam out of its top, in the colour the tool gave it (ACFRadColor). The server plays the
 -- sounds; this file only draws. The numbers of the cloud are the config's RadPuff... knobs.
 -- =========================================================================
@@ -10,7 +11,7 @@
 include("shared.lua")
 
 assert(ACFLazers and ACFLazers.Config, "[acf_radiator] lua/autorun/acf_lazers_config.lua is missing or did not load")
-assert(ACFLazers.GetRadRadius, "[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no ACFLazers.GetRadRadius). Copy the config of the same batch.")
+assert(ACFLazers.GetRadRadius and ACFLazers.PickRadPuffMaterial, "[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no ACFLazers.PickRadPuffMaterial). Copy the config of the same batch.")
 
 local Config = ACFLazers.Config
 
@@ -66,7 +67,7 @@ function ENT:Think()
     for _ = 1, count do
         -- a random spot on the top of the model
         local pos = self:LocalToWorld(Vector(math.Rand(mins.x, maxs.x), math.Rand(mins.y, maxs.y), maxs.z))
-        local puff = emitter:Add(Config.RadPuffMaterial, pos)
+        local puff = emitter:Add(ACFLazers.PickRadPuffMaterial(math.Rand(0, 1)), pos) -- [CHANGED 2] one of ACF's own smoke sprites (the old guess had no texture)
 
         if puff then
             puff:SetDieTime(life * math.Rand(0.7, 1.15))

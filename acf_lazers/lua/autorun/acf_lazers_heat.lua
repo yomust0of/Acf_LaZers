@@ -11,6 +11,7 @@
 -- Console commands:  acf_lazers_heat_info   (anyone: prints the heat of what you are looking at)     acf_lazers_heat_set <F>   (admins: sets it to that temperature, a test aid)
 -- 15.2 (search for [CHANGED 1]): the radiator tool asks this file for the temperature of the plain part you look at (two network messages, answered one entity at a time).
 -- 15.3 (search for [CHANGED 2]): hot lazers set players on fire (one timer, the box test is in the config), and the info command no longer talks about a lock-out (there is none).
+-- 15.4 (search for [CHANGED 3]): radiators cool themselves HeatCoolMultRad times as fast as a prop, and a player sitting in a vehicle is not set on fire (HeatIgniteSeated).
 -- =========================================================================
 
 if not SERVER then return end
@@ -53,11 +54,12 @@ function Heat.GetCapacity(ent)
     return ACFLazers.GetHeatCapacity(Heat.GetMass(ent))
 end
 
---- How fast this kind of entity cools relative to a prop (config): lazers have their own number, every other ACF entity another, everything else 1.
+--- How fast this kind of entity cools relative to a prop (config): lazers and radiators have their own number, every other ACF entity another, everything else 1.
 function Heat.GetCoolMult(ent)
     local class = ent.GetClass and ent:GetClass() or ""
 
     if class == "acf_lazer" then return CFG.HeatCoolMultLazer end
+    if class == "acf_radiator" then return CFG.HeatCoolMultRad end -- [CHANGED 3]
     if string.sub(class, 1, 4) == "acf_" then return CFG.HeatCoolMultACF end
 
     return 1
@@ -266,6 +268,7 @@ end)
 -- A lazer (any class in HeatIgniteClasses) that is HeatIgniteF or hotter sets on fire every player whose collision box touches the lazer's box. The fire is put out HeatIgniteLinger seconds
 -- after the last touch of a hot lazer. ONE timer works everything every HeatIgniteInterval seconds, and it only looks at the lazers in the heat registry (nothing that is cold is ever
 -- looked at). We only put out a fire WE lit: a player who was already burning (from anything else) is never lit again and never put out by us.
+-- 15.4 [CHANGED 3]: a player sitting in a vehicle (Player:InVehicle()) is the crew of what the lazer is on and is never lit by it, unless HeatIgniteSeated is true: the fire only reaches people OUTSIDE.
 -- Veto hook:  hook.Add("ACFLazers_CanIgnite", "name", function(ply, lazer) return false end)  = that player is not set on fire by that lazer (for safe zones and the like).
 
 Heat.Burning = Heat.Burning or setmetatable({}, { __mode = "k" }) -- player -> CurTime() of the last touch of a hot lazer, for the players WE set on fire
@@ -311,6 +314,7 @@ function Heat.IgniteSweep()
     local limit   = tonumber(CFG.HeatIgniteF) or 500
     local linger  = math.max(tonumber(CFG.HeatIgniteLinger) or 0, 0)
     local life    = math.max(tonumber(CFG.HeatIgniteLife) or 5, 0.1)
+    local seated  = CFG.HeatIgniteSeated == true -- [CHANGED 3] true = people in a vehicle burn too
     local boxes    -- the hot lazers: { box = { centre, axes, half sizes }, lazer = the entity } (stays nil when nothing is hot, and then no player is looked at unless one of ours is still burning)
 
     if type(classes) == "table" then
@@ -329,7 +333,7 @@ function Heat.IgniteSweep()
     for _, ply in ipairs(player.GetAll()) do
         local touching = false
 
-        if boxes and IsValid(ply) and ply:Alive() then
+        if boxes and IsValid(ply) and ply:Alive() and (seated or not ply:InVehicle()) then
             for _, entry in ipairs(boxes) do
                 if Heat.TouchesPlayer(entry.box, ply) and hook.Run("ACFLazers_CanIgnite", ply, entry.lazer) ~= false then
                     touching = true
