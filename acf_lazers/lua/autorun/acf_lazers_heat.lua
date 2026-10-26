@@ -9,6 +9,7 @@
 --     one. A sweep every HeatSweepInterval seconds forgets entities that cooled down (and entities that were removed). Nothing thinks per entity.
 --   * all the numbers are in the config (everything starting with Heat...). The maths helpers are in the config too (ACFLazers.HeatCool, GetHeatCapacity ...)
 -- Console commands:  acf_lazers_heat_info   (anyone: prints the heat of what you are looking at)     acf_lazers_heat_set <F>   (admins: sets it to that temperature, a test aid)
+-- 15.2 (search for [CHANGED 1]): the radiator tool asks this file for the temperature of the plain part you look at (two network messages, answered one entity at a time).
 -- =========================================================================
 
 if not SERVER then return end
@@ -225,6 +226,40 @@ function Heat.Sweep()
 end
 
 timer.Create("ACFLazers_HeatSweep", math.max(CFG.HeatSweepInterval, 0.5), 0, function() Heat.Sweep() end)
+
+-- ===================== THE READOUT FOR PLAIN PARTS ===================== [CHANGED 1]
+-- A plain prop has no hover text (ACF's popups exist only for ACF entities), so the radiator tool asks for the temperature of the part you look at: the client sends the entity, the
+-- server answers with its numbers (Fahrenheit; the client converts for its Celsius switch). Nothing is networked for parts nobody looks at. A player who asks faster than half the
+-- RadReadoutInterval, or about something far away, gets no answer.
+util.AddNetworkString("ACFLazers_HeatQuery")
+util.AddNetworkString("ACFLazers_HeatReply")
+
+net.Receive("ACFLazers_HeatQuery", function(_, ply)
+    if not IsValid(ply) then return end
+
+    local now = CurTime()
+
+    if now < (ply.ACFL_NextHeatQuery or 0) then return end
+
+    ply.ACFL_NextHeatQuery = now + math.max(CFG.RadReadoutInterval, 0.05) * 0.5
+
+    local ent = net.ReadEntity()
+
+    if not IsValid(ent) or ent:IsWorld() or ent:IsPlayer() then return end
+
+    local eye   = ply:EyePos()
+    local reach = CFG.RadReadoutDistance * 2 + 64 -- slack: the client measures to where its trace hit, the server to the nearest point of the entity
+
+    if ent:NearestPoint(eye):DistToSqr(eye) > reach * reach then return end
+
+    net.Start("ACFLazers_HeatReply")
+    net.WriteEntity(ent)
+    net.WriteFloat(Heat.GetKJ(ent))
+    net.WriteFloat(Heat.GetTempF(ent))
+    net.WriteFloat(Heat.GetPctHot(ent))
+    net.WriteFloat(Heat.GetMass(ent))
+    net.Send(ply)
+end)
 
 -- ===================== CONSOLE COMMANDS =====================
 

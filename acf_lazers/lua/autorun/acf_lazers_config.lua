@@ -4,12 +4,17 @@
 --           (same file in the game folder and on the server. The new lazer / capacitor / generator init.lua files REFUSE to load with the old config: they need the heat knobs and
 --            ACFLazers.HeatCool from this one, and the new file lua/autorun/acf_lazers_heat.lua)
 --
--- CHANGES vs the config you have now (handoff 14). Search this file for [CHANGED n].
+-- CHANGES vs the config of handoff 14 (everything since is listed, so this is right whether or not you applied 15 and 15.1). Search this file for [CHANGED n].
 --   1  THE HEAT KNOBS: one new block "HEAT" (everything starting with Heat...), between the generator hub and the linking tools. Temperatures are typed in Fahrenheit.
 --   2  THE HEAT HELPERS: new pure-maths section "HEAT HELPERS" (cooling law, heat capacity from mass, the scalars along the size of a lazer / capacitor / generator, the lock-out
 --      percent, the quadratic damage, the explosion filler). Nothing in it touches the game.
 --   3  (15.1) LAZER HEAT x5: HeatLazerSmall and HeatLazerBig are 5 (were 1). A lazer makes five times as much heat per kJ it spends, and its beam heats props five times as fast (the beam's heat
 --      is built from the same rate). To keep the props' heating as it was, set HeatHitSmall and HeatHitBig to 0.2.
+--   4  (15.2) THE RADIATOR KNOBS: one new block "RADIATOR" (everything starting with Rad...), right after the heat block: model, width range, mass, reach, sap rate, overclock, waste, efficiency, damage,
+--      timers and what the player sees (radius sphere, temperature readout).
+--   5  (15.2) THE RADIATOR HELPERS: new pure-maths section "RADIATOR HELPERS" (size -> mass / radius / sap rate / waste, efficiency, the weighted fill that shares the cooling among the hot parts,
+--      one step of a radiator pool, where a radiator's own heat settles, and the numbers the tool shows). Nothing in it touches the game.
+--   6  (15.2) LinkClasses has acf_radiator, so every tool can select and link radiators.
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -322,7 +327,7 @@ table.Merge(ACFLazers.Config, {
     GenHealthMult      = 1,     -- multiplier on the health ACF works out from the surface area
     GenMaxPerPlayer    = 10,    -- default for the server variable sbox_maxacf_generators
 
-    -- ===================== HEAT (the heat core. The radiator entity comes in the next batch) ===================== [CHANGED 1]
+    -- ===================== HEAT (the heat core. The radiator block follows it) ===================== [CHANGED 1]
     -- WHAT IT IS. Any entity can hold heat. Heat is kept as kJ ABOVE room temperature, and an entity's heat CAPACITY is its mass: kJ per kelvin = mass (kg) x HeatSpecificHeat.
     -- A heavy plate needs a lot of kJ to warm up, a light lazer very few. An entity at room temperature costs nothing to keep track of, and nothing heats unless we say so:
     --   * a lazer that is firing heats ITSELF          (the kJ it spends x HeatLazerSmall .. HeatLazerBig)
@@ -390,10 +395,66 @@ table.Merge(ACFLazers.Config, {
     -- TESTING AID
     HeatInfoDistance    = 4096,   -- units. The console command acf_lazers_heat_info prints the heat of whatever you are looking at, up to this far away
 
+    -- ===================== RADIATOR (the heat sink: it carries heat away from the parts around it) ===================== [CHANGED 4]
+    -- WHAT IT IS. A radiator does ALL the cooling work; the parts around it hold no cooling logic at all. Every RadSweepInterval seconds it looks at the parts that are in ITS contraption
+    -- (ACF's own contraption tracking, CFW) AND inside its radius, and takes heat out of the ones that are hot, up to its sap rate (kJ per second).
+    --   * WHO IS A MEMBER: every entity with a physics object in the radiator's contraption and inside the radius, except players, NPCs and other radiators (a radiator never cools a radiator:
+    --     a radiator that could cool itself could never overheat). The list is rebuilt when CFW says the contraption changed, when you resize or link a radiator, and every RadRefreshInterval
+    --   * WHO GETS COOLED MOST: the heat is taken in proportion to how hot each part is (its temperature above room temperature ^ RadWeightPower), so a plate cooked by a lazer gives up the
+    --     lion's share and the lazer behind it gets less. A part can never be cooled below room temperature: what it cannot give goes to the others
+    --   * POOLS: radiators linked to each other (the link tools, right-click) are ONE pool: one combined member list (a part in range of two of them is ONE member, never cooled twice) and the
+    --     sum of their sap rates. Each radiator still has its own heat, overclock and efficiency
+    --   * THE RADIATOR'S OWN HEAT: working makes waste heat (RadWasteSmall .. RadWasteBig x the work it tries to do). Its 100% is the HOT temperature (HeatHotF), like a plate. It cools by itself
+    --     like any ACF entity (HeatCoolMultACF). Up to RadEffStartPct it works at full efficiency; from there its efficiency falls in a straight line to RadEffFloorPct at 100%; over 100% it
+    --     damages itself (RadDamage) until it dies. The waste comes from the work it TRIES to do, not from what it removes: a radiator that loses efficiency does not cool itself down by it
+    --   * OVERCLOCK (wire input): multiplies the sap rate (and the waste). 1 = normal, 0 = off, up to RadOverclockMax. Past about 3 to 4 the extra rate costs more efficiency than it gains
+    -- "Small .. Big" pairs: the Small number is for the narrowest radiator (RadWidthMin), the Big number for the widest (RadWidthMax), in between along the size (see each knob).
+    RadModel          = "models/lasers/heatsink.mdl", -- your model: a squished cube 42 wide x 42 long x 30 tall at scale 1. If the file is missing the radiator refuses to spawn and says so
+    RadModelWidth     = 42,     -- units. The width (and length) of that model at scale 1. The tool slider is the WIDTH in units, and the model scale is width / this
+    RadWidthMin       = 12,     -- [GUESS] narrowest radiator the tool can make (units). Scale 0.29
+    RadWidthMax       = 60,     -- [GUESS] widest (units). Scale 1.43
+    RadWidthDefault   = 42,     -- starting value of the tool slider (42 = the model as it is, scale 1)
+    RadMassMin        = 15,     -- [GUESS] kg at RadWidthMin
+    RadMassMax        = 650,    -- [GUESS] kg at RadWidthMax. In between the mass follows a power law (a straight line on log-log paper), so every width has a sensible mass. A heavier radiator
+    --                             holds more heat for the same waste, so it runs cooler (the tool shows where each size settles)
+    RadArmourAtOne    = 40,     -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod)
+    RadHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
+    RadMaxPerPlayer   = 10,     -- default for the server variable sbox_maxacf_radiators (how many radiators one player may have)
+    -- REACH AND RATE. Radius runs in a straight line along the width. The sap rate is the heat one radiator takes out per second at overclock 1 (the "scalar" for how much heat it can eat).
+    RadRadiusSmall    = 300,    -- units, for RadWidthMin
+    RadRadiusBig      = 800,    -- units, for RadWidthMax
+    RadSapSmall       = 300,    -- kJ per second for RadWidthMin at overclock 1
+    RadSapBig         = 25000,  -- kJ per second for RadWidthMax at overclock 1. [GUESS] about what one 100 to 160 mm lazer makes as heat with HeatLazer 5 (16,500 to 32,600 kJ/s). Link radiators into a pool for more: a 300 mm lazer makes 200,000
+    RadSapCurve       = 1,      -- how the sap rate runs between the two: 0 = a straight line, 1 = the same power law as the mass (default), in between = a mix. With 1 a radiator of any width settles at a
+    --                             similar share of its own limit; with 0 the middle widths eat a lot more than their mass can take (they run hot). Clamped to 0 .. 1
+    RadWeightPower    = 1,      -- how much hotter parts are favoured: a part's share of the cooling is (its temperature above room temperature) ^ this. 0 = everyone gives equally, 1 = in proportion
+    --                             to temperature (default), 2 = the hottest part takes far more
+    -- OVERCLOCK
+    RadOverclockDefault = 1,    -- what the Overclock input counts as while nothing is wired to it
+    RadOverclockMax   = 6,      -- the largest overclock; the wire value is clamped to 0 .. this (0 = the radiator is off)
+    RadWasteSmall     = 0.01,   -- waste heat the radiator makes, as a share of the kJ it TRIES to remove (0.01 = 1%). Small: the narrowest radiator ...
+    RadWasteBig       = 0.01,   -- ... and the widest. One knob per end because the small ones carry overclock far better than the big ones (a big one at the default dies at 5x)
+    RadEffStartPct    = 50,     -- percent of HOT where the radiator's efficiency starts to fall (below this it is 100%)
+    RadEffFloorPct    = 40,     -- the efficiency (percent) it has fallen to at 100% of HOT, and keeps above that
+    RadDamage         = 4,      -- percent of the radiator's MAX HEALTH lost per second at twice its limit (200% of HOT), growing with the square of how far over it is. 0 = it never hurts itself
+    -- BOOKKEEPING
+    RadSweepInterval  = 0.25,   -- seconds between the radiators' work (one timer for all of them). A radiator takes (rate x the time since the last one) out each time
+    RadMaxDeltaTime   = 1,      -- seconds. The longest "time since the last sweep" it will act for (a lag spike cannot turn into one huge bite)
+    RadRefreshInterval = 15,    -- seconds. Safety refresh: every radiator rebuilds its member list at least this often, even when no event told it to
+    -- WHAT THE PLAYER SEES. The radius is drawn as a sphere around the radiator you aim at, while you hold the toolgun (any tool) and are not in a seat.
+    RadDrawAimDistance = 4096,  -- units. How far away a radiator can be and still show its radius when you aim at it
+    RadDrawColor      = { 255, 170, 40 }, -- red, green, blue of the sphere
+    RadDrawFillAlpha  = 10,     -- 0 .. 255. How solid the inside of the sphere looks (0 = just the wire lines)
+    RadDrawLines      = 24,     -- lines of the wire sphere in each direction (more = rounder, a little slower)
+    -- The temperature of a plain prop (it has no hover text of its own): with the radiator tool out, look at it from RadReadoutDistance units or closer. The server answers at most every
+    -- RadReadoutInterval seconds per player.
+    RadReadoutDistance = 256,
+    RadReadoutInterval = 0.25,
+
     -- ===================== LINKING TOOLS =====================
     -- The things the link tools (right-click / shift / reload on the lazer, capacitor and generator tools) can select and link. ACF's own link system decides which PAIRS work:
-    --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor.
-    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine" }, -- class -> the word used in chat messages
+    --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor, radiator <-> radiator (a pool).
+    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine", acf_radiator = "radiator" }, -- class -> the word used in chat messages [CHANGED 6]
 
     -- ===================== WOBBLE: A DAMAGED LAZER LOSES ITS AIM =====================
     -- The lower a lazer's health, the more its beam drifts away from where it points. The drift is SMOOTH (it slowly wanders around, it never
@@ -788,6 +849,226 @@ function ACFLazers.GetLazerExplosionFiller(caliber)
     local hePower = ACF and tonumber(ACF.HEPower) or C.HeatHEPowerFallback
 
     return ACFLazers.GetDrawRate(caliber) * C.HeatExplodeKJMult / math.max(hePower, 1e-6) * C.HeatExplosionMult
+end
+
+-- ===================== RADIATOR HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 5]
+
+--- A width coming from the tool, a dupe or a console command, made safe: a whole number of units between RadWidthMin and RadWidthMax (anything that is not a number becomes RadWidthDefault).
+function ACFLazers.ClampRadWidth(width)
+    local C = ACFLazers.Config
+
+    return math.Round(ACFLazers.ClampNumber(width, C.RadWidthDefault, C.RadWidthMin, C.RadWidthMax))
+end
+
+--- 0 at the narrowest radiator ... 1 at the widest. Mass, radius, sap rate and waste all use it.
+function ACFLazers.GetRadSizeFraction(width)
+    local C    = ACFLazers.Config
+    local span = math.max(C.RadWidthMax - C.RadWidthMin, 0.0001)
+
+    return math.Clamp(((tonumber(width) or C.RadWidthDefault) - C.RadWidthMin) / span, 0, 1)
+end
+
+--- Model scale for a width in units (1 = the model as it is).
+function ACFLazers.GetRadScale(width)
+    return width / math.max(ACFLazers.Config.RadModelWidth, 0.0001)
+end
+
+--- Along the size, as a power law between two ends (a straight line on log-log paper): `small` at t = 0 and `big` at t = 1, the same factor for every step.
+local function RadGeometric(t, small, big)
+    small = math.max(small, 1e-6)
+    big   = math.max(big, 1e-6)
+
+    return small * (big / small) ^ t
+end
+
+--- Mass in kg of a radiator this wide.
+function ACFLazers.GetRadMass(width)
+    local C = ACFLazers.Config
+
+    return math.max(1, math.Round(RadGeometric(ACFLazers.GetRadSizeFraction(width), C.RadMassMin, C.RadMassMax)))
+end
+
+--- Radius in units: a straight line from RadRadiusSmall to RadRadiusBig along the width, as a WHOLE number (what the radiator reaches, what the sphere draws and what every text says
+--- is the same number: a half would print differently in different places).
+function ACFLazers.GetRadRadius(width)
+    local C = ACFLazers.Config
+
+    return math.Round(Lerp(ACFLazers.GetRadSizeFraction(width), C.RadRadiusSmall, C.RadRadiusBig))
+end
+
+--- kJ per second the radiator tries to take out at overclock 1. RadSapSmall at the narrowest, RadSapBig at the widest; in between a mix of a straight line and the power law (RadSapCurve).
+function ACFLazers.GetRadSap(width)
+    local C      = ACFLazers.Config
+    local t      = ACFLazers.GetRadSizeFraction(width)
+    local linear = Lerp(t, C.RadSapSmall, C.RadSapBig)
+    local mix    = math.Clamp(tonumber(C.RadSapCurve) or 0, 0, 1)
+
+    return Lerp(mix, linear, RadGeometric(t, C.RadSapSmall, C.RadSapBig))
+end
+
+--- Waste heat as a share of the kJ the radiator tries to remove.
+function ACFLazers.GetRadWaste(width)
+    local C = ACFLazers.Config
+
+    return math.max(Lerp(ACFLazers.GetRadSizeFraction(width), C.RadWasteSmall, C.RadWasteBig), 0)
+end
+
+--- The Overclock wire value made safe: 0 .. RadOverclockMax. Not a number (a broken E2 can send NaN) counts as 0 = off.
+function ACFLazers.ClampRadOverclock(value)
+    local C = ACFLazers.Config
+
+    value = tonumber(value)
+
+    if not value or value ~= value then return 0 end
+
+    return math.Clamp(value, 0, math.max(C.RadOverclockMax, 0))
+end
+
+--- The radiator's efficiency (0..1) at a heat of `pct` (1 = 100% of HOT): full up to RadEffStartPct, a straight line down to RadEffFloorPct at 100%, and that floor above.
+function ACFLazers.GetRadEfficiency(pct)
+    local C     = ACFLazers.Config
+    local start = (tonumber(C.RadEffStartPct) or 50) / 100
+    local floor = math.Clamp((tonumber(C.RadEffFloorPct) or 40) / 100, 0, 1)
+
+    pct = tonumber(pct) or 0
+
+    if pct ~= pct or pct <= start then return 1 end
+    if pct >= 1 then return floor end
+
+    return Lerp((pct - start) / (1 - start), 1, floor)
+end
+
+--- Shares `total` among holders in proportion to their weights, but never more than a holder's limit; what a capped holder cannot take goes to the others, again by weight.
+--- weights[i] > 0 and limits[i] > 0 for a holder to take part. Returns the list of takes (same order). The takes add up to min(total, sum of the limits).
+function ACFLazers.WeightedFill(weights, limits, total)
+    local count, takes, open = #limits, {}, {}
+
+    for i = 1, count do
+        takes[i] = 0
+
+        if (limits[i] or 0) > 0 and (weights[i] or 0) > 0 then open[#open + 1] = i end
+    end
+
+    local left = tonumber(total) or 0
+
+    if left ~= left then left = 0 end
+
+    for _ = 1, count + 1 do
+        if left <= 0 or #open == 0 then break end
+
+        local sum = 0
+
+        for _, i in ipairs(open) do sum = sum + weights[i] end
+
+        local capped, still, used = false, {}, 0
+
+        for _, i in ipairs(open) do
+            if left * weights[i] / sum >= limits[i] then
+                takes[i] = limits[i] -- this one gives all it has
+                used     = used + limits[i]
+                capped   = true
+            else
+                still[#still + 1] = i
+            end
+        end
+
+        if not capped then
+            for _, i in ipairs(open) do takes[i] = left * weights[i] / sum end
+
+            break
+        end
+
+        left = left - used
+        open = still
+    end
+
+    return takes
+end
+
+--- One step of a radiator pool. items[i] = { sap = kJ per second radiator i tries to take out (its sap rate x its overclock), eff = its efficiency 0..1 }.
+--- avail = kJ of heat the members hold. dt = seconds. Every radiator tries its full rate; what it really takes out is its rate x its efficiency. When the members hold less than
+--- the radiators could take, all of them do proportionally less work (and so make proportionally less waste).
+--- Returns the total kJ removed, and per item { work = kJ of effort (what the waste is a share of), removed = kJ it took out }.
+function ACFLazers.RadPoolStep(items, avail, dt)
+    local capacity = 0
+
+    for _, item in ipairs(items) do
+        capacity = capacity + math.max(item.sap, 0) * math.Clamp(item.eff, 0, 1) * dt
+    end
+
+    local k = 0
+
+    if capacity > 0 then k = math.min(1, math.max(avail, 0) / capacity) end
+
+    local out, total = {}, 0
+
+    for i, item in ipairs(items) do
+        local work    = math.max(item.sap, 0) * dt * k
+        local removed = work * math.Clamp(item.eff, 0, 1)
+
+        out[i] = { work = work, removed = removed }
+        total  = total + removed
+    end
+
+    return total, out
+end
+
+--- The heat (kelvin above room temperature) at which a body of this heat capacity (kJ per kelvin) loses exactly `waste` kJ per second to natural cooling, with the cooling multiplier of
+--- its kind. Solves  waste = capacity x a x theta x (1 + boost x theta / hot)  (the cooling law of ACFLazers.HeatCool).
+function ACFLazers.GetCoolingSettleK(waste, capacity, mult)
+    local C = ACFLazers.Config
+
+    waste = math.max(tonumber(waste) or 0, 0)
+
+    local a = math.max(tonumber(mult) or 1, 1e-9) / math.max(C.HeatCoolTau, 1e-6)
+    local p = math.max(capacity, 1e-9) * a
+    local q = p * math.max(C.HeatCoolHotBoost, 0) / ACFLazers.GetHeatRiseHot()
+
+    if q <= 1e-12 then return waste / p end
+
+    return (-p + math.sqrt(p * p + 4 * q * waste)) / (2 * q)
+end
+
+--- What the tool shows for a width: the numbers of the radiator and how it behaves under overclock. Everything is worked out with the same functions the radiator uses.
+--- `settle` = where its own heat levels off (percent of HOT as a fraction, 1 = 100%) when it works flat out for ever; `dies` = that is over 100%, so it would destroy itself.
+function ACFLazers.GetRadReadout(width)
+    local C        = ACFLazers.Config
+    local w        = ACFLazers.ClampRadWidth(width)
+    local mass     = ACFLazers.GetRadMass(w)
+    local capacity = ACFLazers.GetHeatCapacity(mass)
+    local sap      = ACFLazers.GetRadSap(w)
+    local waste    = ACFLazers.GetRadWaste(w)
+    local riseHot  = ACFLazers.GetHeatRiseHot()
+
+    local function row(x)
+        local attempted = sap * x
+        local settle    = ACFLazers.GetCoolingSettleK(attempted * waste, capacity, C.HeatCoolMultACF) / riseHot
+        local eff       = ACFLazers.GetRadEfficiency(settle)
+
+        return { x = x, attempted = attempted, wasteRate = attempted * waste, settle = settle, eff = eff, net = attempted * eff, dies = settle > 1 }
+    end
+
+    local show = { width = w, scale = ACFLazers.GetRadScale(w), mass = mass, capacity = capacity, radius = ACFLazers.GetRadRadius(w), sap = sap, wasteFrac = waste, one = row(1), rows = {} }
+    local top  = math.max(C.RadOverclockMax, 0)
+
+    for x = 1, math.floor(top) do show.rows[#show.rows + 1] = row(x) end
+
+    -- the overclock with the most net removal that does not destroy the radiator, and the lowest one that does (steps of 0.05)
+    local best = row(math.min(1, top))
+
+    for step = 0, math.floor(top / 0.05 + 0.5) do
+        local candidate = row(step * 0.05)
+
+        if candidate.dies then
+            show.dieAt = show.dieAt or candidate.x
+        elseif candidate.net > best.net then
+            best = candidate
+        end
+    end
+
+    show.best = best
+
+    return show
 end
 
 -- ===================== GENERATOR HUB HELPERS (pure maths: nothing here touches the game) =====================

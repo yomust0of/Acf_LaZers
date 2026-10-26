@@ -1,5 +1,6 @@
 -- =========================================================================
 -- NEW (12), fixed in 12.1 (AddCSLuaFile). Goes to:  lua/autorun/acf_lazers_linkkit.lua
+-- 15.2: only the TEXTS changed (the messages and help lines now mention radiators); the code is the same. Which things the tools react to is the config's LinkClasses.
 --
 -- THE LINK KIT: the linking part of every tool of this addon, written ONCE. A tool file adds one line, after its own settings:
 --
@@ -11,7 +12,7 @@
 --   Reload               UNLINK. With things selected, aim at the one to unlink them from. With nothing selected, it breaks every link of the thing you aim at that THIS addon made
 --   Right-click on nothing, or putting the tool away, clears the selection
 -- WHAT can be linked is decided by ACF's own link system (a pair that has no link function is refused with "Links between these two entities are impossible"):
---     engine -> generator hub -> capacitor -> lazer      (also capacitor <-> capacitor)
+--     engine -> generator hub -> capacitor -> lazer      (also capacitor <-> capacitor, and radiator <-> radiator: linked radiators are one pool)
 -- and WHICH things the tools react to at all is the list ACFLazers.Config.LinkClasses (class name -> the short word used in chat messages).
 -- An engine only has its generator links broken by "break every link": the links ACF made (gearboxes, fuel) are never touched by these tools.
 -- =========================================================================
@@ -71,7 +72,7 @@ if CLIENT then
     -- The info lines and chat texts. `left` is that tool's own left-click line.
     function Kit.AddLanguage(mode, left)
         language.Add("tool." .. mode .. ".left", left)
-        language.Add("tool." .. mode .. ".right", "Link: click an engine, generator, capacitor or lazer first (it turns green), then click what to link everything green to (engine > generator > capacitor > lazer)")
+        language.Add("tool." .. mode .. ".right", "Link: click an engine, generator, capacitor, lazer or radiator first (it turns green), then click what to link everything green to (engine > generator > capacitor > lazer; radiator <-> radiator)")
         language.Add("tool." .. mode .. ".right_shift", "(Hold Shift) Add another thing to the selection, or take a selected thing off it")
         language.Add("tool." .. mode .. ".reload", "Unlink: aim at the one to unlink the selected things from (nothing selected = break all links of what you aim at)")
         language.Add("tool." .. mode .. ".0", "Left-click: " .. left .. ".  Right-click: select / link.  Shift + right-click: select more.  Reload: unlink.")
@@ -294,7 +295,7 @@ function Kit.Install(TOOL, mode, left)
         if not Kit.IsLinkable(hit) then
             UnselectAll(self)
 
-            Say(ply, "Info", "Link: selection cleared. Aim at an engine, a generator, a capacitor or a lazer.")
+            Say(ply, "Info", "Link: selection cleared. Aim at an engine, a generator, a capacitor, a lazer or a radiator.")
 
             return false
         end
@@ -346,7 +347,7 @@ function Kit.Install(TOOL, mode, left)
         local hit = trace.Entity
 
         if not Kit.IsLinkable(hit) then
-            Say(ply, "Info", "Unlink: aim at an engine, a generator, a capacitor or a lazer.")
+            Say(ply, "Info", "Unlink: aim at an engine, a generator, a capacitor, a lazer or a radiator.")
 
             return false
         end
