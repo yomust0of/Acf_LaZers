@@ -366,7 +366,7 @@ table.Merge(ACFLazers.Config, {
     -- All props cool at the same rate. Lazers, radiators and the other ACF entities (capacitors, generators ...) have a multiplier of their own, relative to props.
     HeatCoolTau         = 300,    -- seconds. The base cooling time constant (the speed of 15.2): after this long a mildly warm prop has lost 63% of its excess heat. Leave it alone and use HeatCoolSpeed
     HeatCoolSpeed       = 1.25,   -- [CHANGED 12] (15.4) THE multiplier on every natural cooling, relative to the speed of 15.2: 1 = 15.2 (300 s), 2 = what 15.3 had (150 s), 1.25 = 240 s. Lower = everything cools more slowly
-    HeatCoolHotBoost    = 1,      -- extra cooling at the HOT temperature, as a multiple of the base (0 = plain exponential at every temperature, 1 = twice as fast at HOT, 3 = four times)
+    HeatCoolHotBoost    = 1.3,    -- extra cooling at the HOT temperature, as a multiple of the base (0 = plain exponential at every temperature, 1 = twice as fast at HOT, 3 = four times)
     HeatCoolMultLazer   = 1,      -- cooling speed of lazers relative to props (2 = twice as fast)
     HeatCoolMultACF     = 1,      -- cooling speed of every OTHER ACF entity (capacitors, generators ...) relative to props
     HeatCoolMultRad     = 5,      -- [CHANGED 12] (15.4) cooling speed of RADIATORS relative to props (5 = five times as fast): a radiator sheds its own waste heat quickly
@@ -378,8 +378,8 @@ table.Merge(ACFLazers.Config, {
     HeatMaxDeltaTime    = 0.5,    -- seconds. The longest "time since the last check" a heat check will act for (a lag spike cannot turn into one huge burst of heat damage)
 
     -- WHERE THE HEAT COMES FROM. Small .. Big = a straight line over the size of the thing (see the top of this block).
-    HeatLazerSmall      = 5,      -- a firing lazer adds this many kJ of heat per kJ it spends (the draw). 1 = all of it, 5 = five times as much [CHANGED 3] (15.1: was 1; the beam's heat on props is built from this same rate, so it follows)
-    HeatLazerBig        = 5,
+    HeatLazerSmall      = 15,      -- a firing lazer adds this many kJ of heat per kJ it spends (the draw). 1 = all of it, 5 = five times as much [CHANGED 3] (15.1: was 1; the beam's heat on props is built from this same rate, so it follows)
+    HeatLazerBig        = 30,
     HeatHitSmall        = 1,      -- a beam adds (the lazer's heat rate) x this x the same focus / angle / burn-through weakening as its damage to the prop it hits
     HeatHitBig          = 1,
     HeatCapSmall        = 1 / 3,  -- a capacitor adds this many kJ of heat per kJ that goes in, and again per kJ that goes out
@@ -390,10 +390,10 @@ table.Merge(ACFLazers.Config, {
     -- LAZERS: THE LIMIT AND THE DAMAGE. [CHANGED 8] (15.3: the lock-out is GONE. A lazer fires whenever it has power, however hot it is. Make your own safeguard with the wire outputs
     -- HeatPct / HeatF / HeatKJ of the lazer, and use radiators to keep it cool.)
     -- HeatLazerCapF is 100% for a lazer (0% = room temperature). Above 100% the lazer damages itself (see HeatLazerDamage, and the TURBO knobs further down for what happens past 120%).
-    HeatLazerCapF       = 1100,   -- degrees Fahrenheit. 100% of a lazer. Separate from HeatHotF so the two can be tuned apart (they start equal)
+    HeatLazerCapF       = 900,    -- degrees Fahrenheit. 100% of a lazer. Separate from HeatHotF so the two can be tuned apart (they start equal)
     HeatLazerDamage     = 4,      -- percent of the lazer's MAX HEALTH lost per second when it is twice as hot as its limit (200%). The loss grows with the SQUARE of how far over the limit it is: half as
     --                               far over (150%) = a quarter of this, 10% over = 1/100 of this. 0 = lazers never hurt themselves
-    HeatExplodeChance   = 0.5,    -- 0..1. A lazer that dies from its own heat WHILE FIRING explodes with this chance; otherwise (and always when it was not firing) it just dies
+    HeatExplodeChance   = 0.8,    -- 0..1. A lazer that dies from its own heat WHILE FIRING explodes with this chance; otherwise (and always when it was not firing) it just dies
     HeatExplodeKJMult   = 2,      -- the explosion's energy = this x the lazer's draw (kJ per second), turned into HE filler the way a capacitor does (kJ / ACF.HEPower, so NOT literal kg)
     HeatExplosionMult   = 1,      -- multiplier on that filler. 1 = exactly the HE equivalent; raise it for bigger bangs
     HeatDeathDebrisPower = 20000, -- [GUESS] how hard the pieces fly when a lazer simply dies of heat (not capped by anything but MaxDebrisPower)
