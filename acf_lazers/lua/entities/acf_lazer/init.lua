@@ -4,7 +4,7 @@
 --           NEEDS the new config (lua/autorun/acf_lazers_config.lua) AND the new file lua/autorun/acf_lazers_heat.lua: it refuses to load without them
 --
 -- CHANGES vs the init.lua you have now (version 14). Search this file for [CHANGED n].
---   1  The version line says 15.3
+--   1  The version line says 15.7
 --   2  A LOAD-TIME CHECK for the heat system (ACFLazers.Heat, from acf_lazers_heat.lua). Missing = one clear console error and the lazer does not load
 --   3  LAZER HEAT (new section). The lazer's own heat: GetHeatPct, GetHeatRate, HeatThink, TakeHeatDamage, HeatDeath.
 --      New fields in Initialize (NextHeatCheck, LastHeatCheck) and three new wire outputs: HeatKJ, HeatF, HeatPct (percent of the lazer's limit)
@@ -14,6 +14,16 @@
 --   6  The hover text shows the temperature (Fahrenheit) and the percent of the limit, and says when the lazer is damaging itself
 --   7  THE BEAM HEATS WHAT IT HITS, and a plate has to be HOT to be burned through. DamageProp adds heat to every prop ACF accepted the hit on; the burn-through test has one more
 --      condition (HeatPenGate in the config). A destroyed plate still lets the beam through
+--   8  (15.5) THE HEAT READOUT HAS ITS OWN CLOCK. The wire outputs HeatKJ / HeatF / HeatPct and the hover text used to be refreshed together with the energy read: every 0.25 s while Fire was held,
+--      once a SECOND when the lazer was idle, and ACF buffers a hover text for 1 s on top. The heat itself was always exact; an idle lazer that was cooling just LOOKED slower than one with Fire
+--      held on an empty pool. New: HeatReadout (called from Think) refreshes the three outputs and the hover text every HeatOutputInterval while the lazer holds heat (and once more when it
+--      has cooled to room temperature); UpdateHeatOutputs writes them (UpdateWireOutputs does not any more: the readout has ONE owner); ENT.OverlayDelay = LazerOverlayDelay. NEEDS the 15.5 config (two knobs)
+--   9  (15.6) FIX: a lazer that was never hot showed 0 on its HeatF output (the Wire default) instead of 59 F, because the readout flag started as "cold and already shown". It starts as "not yet shown"
+--      now: the first readout writes the cold state (0 kJ, 59 F, 0%) once. Nothing else in this file changed.
+--   10 (15.7) THE TWO READOUT KNOBS ARE OPTIONAL. 15.5 / 15.6 stopped this file at its first lines when HeatOutputInterval / LazerOverlayDelay were missing from the config, and a file that stops there
+--      leaves an EMPTY SHELL of a class behind (no hover text, no wire outputs, stock size). Now a missing knob means 0.1 s / 0.25 s, and nothing about the readout can stop this file.
+--   11 (15.7) THE PLAYER LIMIT: the server variable sbox_maxacf_lazers is created HERE, from LazerMaxPerPlayer (config; 40, also when the config has none), like the capacitor, generator and radiator
+--      do. A separate file of yours used to create it (lua/autorun/server/acf_lazers_limits.lua, at 20): copy the 15.7 version of that file over it, or it creates the variable first and its 20 stays.
 -- =========================================================================
 
 AddCSLuaFile("cl_init.lua")
@@ -49,9 +59,21 @@ end
 
 local Heat = ACFLazers.Heat
 
+-- [CHANGED 10] (15.7) The two knobs of the heat readout are OPTIONAL: a config without them (a 15.4 one) gets these. (15.5 / 15.6 returned from this file when they were missing, and a file that
+-- stops at its first lines leaves an empty shell of a class behind. Nothing about the readout may stop this file.)
+local READOUT_INTERVAL_DEFAULT = 0.1  -- seconds between heat-readout refreshes (config: HeatOutputInterval)
+local OVERLAY_DELAY_DEFAULT    = 0.25 -- seconds, the hover-text buffer of this entity (config: LazerOverlayDelay)
+
+ENT.OverlayDelay = math.max(tonumber(LASER_CONFIG.LazerOverlayDelay) or OVERLAY_DELAY_DEFAULT, 0) -- [CHANGED 8] ACF's hover-text buffer for this entity (ACF's own default is 1 s)
+
 -- Which version of this file is running. It is printed to the server console when the file loads, and every notice below carries it.
-local VERSION = "15.3" -- [CHANGED 1]
+local VERSION = "15.7" -- [CHANGED 1]
 MsgN("[acf_lazer] init.lua version " .. VERSION .. " loaded")
+
+-- [CHANGED 11] (15.7) How many lazers one player may own: GMod reads a server variable called sbox_max<name> (the spawn function below asks ply:CheckLimit("acf_lazers")), and CreateConVar does
+-- nothing if the variable already exists. The default is the config knob LazerMaxPerPlayer (40 when the config has none). In single player GMod never checks limits [SEEN wiki: Player:CheckLimit].
+CreateConVar("sbox_maxacf_lazers", tostring(tonumber(LASER_CONFIG.LazerMaxPerPlayer) or 40), FCVAR_ARCHIVE + FCVAR_NOTIFY, "Maximum ACF lazers one player may spawn")
+cleanup.Register("acf_lazers") -- (this line used to be in lua/autorun/server/acf_lazers_limits.lua)
 
 -- Diagnosis switch, now a COMMAND. Admins (in their own console) and the server console type  acf_lazer_debug 1  and fire at a prop:
 -- the lazer prints, once a second, what happened to it (which gate said no, what ACF's damage permission says, health before / after, whether the fire step ran)
@@ -174,6 +196,8 @@ function ENT:Initialize()
     self.HeatDying     = false -- [CHANGED 3]
     self.NextHeatCheck = 0     -- [CHANGED 3] CurTime() of the next heat check (HeatThink)
     self.LastHeatCheck = CurTime() -- [CHANGED 3]
+    self.NextHeatRead  = 0     -- [CHANGED 8] CurTime() of the next heat-readout refresh (HeatReadout)
+    self.HeatShown     = true  -- [CHANGED 9] (15.6) true until the readout has written the COLD state: the first refresh writes 0 kJ / 59 F / 0% even for a lazer that was never hot (15.5 started it false, so HeatF stayed at the Wire default 0)
     -- end-of-beam sounds (see the BeamSounds block below). All start empty; they are created on demand.
     self.SoundEmitter  = nil  -- the invisible entity that carries the sounds to the beam end
     self.BurnSnd       = nil  -- CSoundPatch (the object CreateSound returns): the burn loop
@@ -334,9 +358,7 @@ function ENT:UpdateWireOutputs()
     WireLib.TriggerOutput(self, "PowerDraw", ACFLazers.GetDrawRate(self:GetCaliber()))
     WireLib.TriggerOutput(self, "Energy", self.LastEnergy or 0)
     WireLib.TriggerOutput(self, "NoPower", self.NoPower and 1 or 0)
-    WireLib.TriggerOutput(self, "HeatKJ", Heat.GetKJ(self)) -- [CHANGED 3]
-    WireLib.TriggerOutput(self, "HeatF", Heat.GetTempF(self))
-    WireLib.TriggerOutput(self, "HeatPct", self:GetHeatPct() * 100)
+    -- [CHANGED 8] (15.5) the heat outputs HeatKJ / HeatF / HeatPct are written by HeatReadout, on their own clock (they used to be written here, with the energy read)
 
     self.LastWobbleMOA = ACFLazers.GetWobbleCone(self:GetCaliber(), self:GetHealthFraction()) * 60 -- degrees -> MOA
     WireLib.TriggerOutput(self, "Wobble", self.LastWobbleMOA)
@@ -408,6 +430,35 @@ end
 -- kJ of heat per second this lazer makes while it fires: its draw x the lazer scalar (HeatLazerSmall .. HeatLazerBig). Its beam heats props with the same rate (x HeatHitSmall .. HeatHitBig).
 function ENT:GetHeatRate()
     return self:GetDrawRate() * ACFLazers.GetLazerHeatScalar(self:GetCaliber())
+end
+
+-- [CHANGED 8] (15.5) The three heat wire outputs: kJ above room temperature, degrees Fahrenheit, percent of the lazer's limit.
+function ENT:UpdateHeatOutputs()
+    if not WireLib then return end
+
+    WireLib.TriggerOutput(self, "HeatKJ", Heat.GetKJ(self))
+    WireLib.TriggerOutput(self, "HeatF", Heat.GetTempF(self))
+    WireLib.TriggerOutput(self, "HeatPct", self:GetHeatPct() * 100)
+end
+
+-- [CHANGED 8] (15.5) The heat READOUT (the three outputs above and the hover text) has its OWN clock. Until 15.4 it was refreshed together with the energy reading, which runs every
+-- LazerEnergyReadInterval (0.25 s) while Fire is held and only once a SECOND when the lazer is idle (and ACF buffers a hover text for another second): the real heat was the same in
+-- every case (the heat store is exact), but an idle lazer that was cooling down, or being cooled by a radiator, LOOKED up to a second behind, and a lazer with Fire held on an empty pool
+-- looked fresher. Now: every HeatOutputInterval while the lazer holds heat, and once more when it has cooled to room temperature (so the readout ends at 0). A lazer at room
+-- temperature that already shows 0 costs one table lookup per interval and nothing else. Called from Think every tick.
+function ENT:HeatReadout(now)
+    if now < self.NextHeatRead then return end
+
+    self.NextHeatRead = now + math.max(tonumber(LASER_CONFIG.HeatOutputInterval) or READOUT_INTERVAL_DEFAULT, 0) -- [CHANGED 10] a missing knob = 0.1 s
+
+    local hot = Heat.GetKJ(self) > 0
+
+    if not (hot or self.HeatShown) then return end
+
+    self.HeatShown = hot
+
+    self:UpdateHeatOutputs()
+    self:UpdateOverlay()
 end
 
 -- Called from Think every tick; does its work every HeatCheckInterval seconds: the damage a lazer over its limit does to itself.
@@ -626,6 +677,8 @@ function ENT:Think()
     self:HeatThink(now) -- [CHANGED 4]
 
     if not IsValid(self) then return end -- [CHANGED 4] its own heat can destroy it
+
+    self:HeatReadout(now) -- [CHANGED 8]
 
     self:RefreshPower(false)
 
