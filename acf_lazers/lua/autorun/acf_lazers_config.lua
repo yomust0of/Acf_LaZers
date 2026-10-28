@@ -31,9 +31,30 @@
 --      (RadFlushFadeSeconds), the burst included.
 --   15 (15.4) STEAM: RadPuffMaterial is now RadPuffMaterials, a list of ACF's own smoke sprites (the old guess had no texture). ACFLazers.PickRadPuffMaterial picks one.
 --   16 (15.4) HeatIgniteSeated: a player sitting in a vehicle is not set on fire by a hot lazer (the crew of the vehicle the lazer is on).
+--   17 (15.5) THE LAZER'S HEAT READOUT HAS ITS OWN CLOCK: HeatOutputInterval (0.1 s) is how often the wire outputs HeatKJ / HeatF / HeatPct and the hover text of a lazer that holds heat are
+--      refreshed, whether it fires, wants to fire or idles; LazerOverlayDelay (0.25 s) is the lazer's hover-text buffer (ACF's default is 1 s). The real heat was never affected.
+--   18 (15.6) THE RADIATOR'S HEAT READOUT HAS THE SAME CLOCK: HeatOutputInterval is also how often a radiator that holds heat refreshes its HeatKJ / HeatF / HeatPct outputs (they used to be written
+--      with every sweep, RadSweepInterval 0.25 s). No new knob.
+--   19 (15.7) THE TWO READOUT KNOBS (HeatOutputInterval, LazerOverlayDelay) ARE OPTIONAL: a config without them no longer stops the lazer or the radiator from loading; they use 0.1 s / 0.25 s.
+--      (15.6 refused to load without them.) PLAYER LIMITS: every entity has its knob (LazerMaxPerPlayer is new) and all four are 40. Each is only the DEFAULT of a server variable
+--      (sbox_maxacf_lazers / _capacitors / _generators / _radiators) that can be changed in the console.
+--   20 (15.8) THE SECOND RADIATOR MODEL, THE ROUNDSINK: new block of knobs RadRound... (the cylinder model models/lasers/roundsink.mdl: radius 13 and height 46 at scale 1, the tool slider is its
+--      RADIUS, 12 to 60) and RadBeyondMax. A radiator is now a "heatsink" (the box, as before) or a "roundsink"; the tool has a model selector. Every radiator size helper (ClampRadWidth,
+--      GetRadSizeFraction, GetRadScale, GetRadMass, GetRadRadius, GetRadSap, GetRadWaste, GetRadCoolantCapacity, GetRadFlushPitch, GetRadReadout) takes the kind as its LAST argument; left out
+--      it is the heatsink and the answers are exactly what they were. NEW helpers: GetRadKinds, ClampRadKind, GetRadKind, GetRadEquivWidth, GetRadVolume, GetRadBeyond, PickRadPuffSpot.
+--      "The same per volume": a roundsink is worked out as the HEATSINK OF THE SAME VOLUME, so a roundsink and a heatsink of equal volume have the same mass, sap rate, waste, tank and flush pitch.
+--   21 (15.9) THE ROUNDSINK'S RANGE IS RADIUS 12 TO 30 (a DIAMETER of 24 to 60: the 60 of 15.8 was meant as a diameter): RadRoundMax 60 -> 30. RadBeyondMax is GONE: the rule it switched is always on.
+--      That rule: a roundsink with MORE volume than the biggest heatsink (radius 24 and a little more, up to 1.95 times at radius 30) has the biggest heatsink's mass and sap rate multiplied by how many
+--      times its volume it has, and its reach goes on along the same line (a heatsink never needs it). A config that still has the line RadBeyondMax works: it is ignored. The tool screen, the menu
+--      text and the hover text of a roundsink also say the DIAMETER. Your dimensions (RadRoundRadius 13, RadRoundHeight 46) are used as they are.
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
+--
+-- YOUR OWN VALUES: this copy carries them, so it can replace your file as it is. Every such line is marked [YOUR VALUE, shipped N]:
+--   HeatCoolHotBoost 1.3 (shipped 1)   HeatLazerSmall 10 (shipped 5)   HeatLazerBig 30 (shipped 5)
+--   HeatLazerCapF 900 (shipped 1100)   HeatExplodeChance 0.8 (shipped 0.5)   HeatMaxDeltaTime 0.25 (shipped 0.5)
+-- Everything else is the shipped 15.9 value (RadFlushKJPerLiter 125000 is the shipped one; the four player limits are 40; the roundsink knobs RadRound... are new in 15.8; in 15.9 the roundsink's slider is radius 12 to 30 = a diameter of 24 to 60, and RadBeyondMax is gone).
 -- =========================================================================
 
 if SERVER then AddCSLuaFile() end
@@ -239,6 +260,9 @@ table.Merge(ACFLazers.Config, {
     -- Above 1 (say 2) also means no override, because a pool can never be more than 100% full.
     LazerStartFullFraction = 0.9,
     LazerEnergyReadInterval = 0.25, -- seconds between refreshes of the lazer's "Energy" wire output while it is in use (it checks once a second when idle)
+    LazerMaxPerPlayer   = 40,       -- [CHANGED 19] (15.7) default for the server variable sbox_maxacf_lazers: how many lazers one player may have. All four entities have such a knob and all are 40.
+                                    --   It is only the DEFAULT: CreateConVar does nothing when the variable already exists (the wiki says it returns the existing one unchanged), so a value it already has wins over
+                                    --   this number. Change it in the console:  sbox_maxacf_lazers 60  (a negative number = no limit, GMod's own convention [GUESS]). In single player GMod never checks limits (the wiki)
 
     -- ===================== SMALL-LAZER BOOST (damage to PROPS only; people are not affected) =====================
     -- Small lazers hit props SmallBoostMult times harder (2 = double). The boost is full at SmallBoostFullMM and below, then slides in a straight line
@@ -289,7 +313,7 @@ table.Merge(ACFLazers.Config, {
     CapReleaseMaxFraction = 1.0,
     CapReleaseMinKJ    = 0.1,
     CapExplosionMult   = 1,     -- 1 = exactly the HE equivalent. Raise it for bigger bangs, lower it for smaller ones
-    CapMaxPerPlayer    = 20,    -- default for the server variable sbox_maxacf_capacitors (how many capacitors one player may have)
+    CapMaxPerPlayer    = 40,    -- [CHANGED 19] (15.7: was 20) default for the server variable sbox_maxacf_capacitors (how many capacitors one player may have)
 
     -- ===================== GENERATOR HUB =====================
     -- WHAT IT IS. A flywheel LOAD for ACF engines. Engines are linked to it (the way they are linked to a gearbox); every server tick it slows each linked engine's flywheel a little
@@ -341,7 +365,7 @@ table.Merge(ACFLazers.Config, {
     GenMassExponent    = 3,
     GenArmourAtOne     = 40,    -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod)
     GenHealthMult      = 1,     -- multiplier on the health ACF works out from the surface area
-    GenMaxPerPlayer    = 10,    -- default for the server variable sbox_maxacf_generators
+    GenMaxPerPlayer    = 40,    -- [CHANGED 19] (15.7: was 10) default for the server variable sbox_maxacf_generators
 
     -- ===================== HEAT (the heat core. The radiator block follows it) ===================== [CHANGED 1]
     -- WHAT IT IS. Any entity can hold heat. Heat is kept as kJ ABOVE room temperature, and an entity's heat CAPACITY is its mass: kJ per kelvin = mass (kg) x HeatSpecificHeat.
@@ -366,7 +390,7 @@ table.Merge(ACFLazers.Config, {
     -- All props cool at the same rate. Lazers, radiators and the other ACF entities (capacitors, generators ...) have a multiplier of their own, relative to props.
     HeatCoolTau         = 300,    -- seconds. The base cooling time constant (the speed of 15.2): after this long a mildly warm prop has lost 63% of its excess heat. Leave it alone and use HeatCoolSpeed
     HeatCoolSpeed       = 1.25,   -- [CHANGED 12] (15.4) THE multiplier on every natural cooling, relative to the speed of 15.2: 1 = 15.2 (300 s), 2 = what 15.3 had (150 s), 1.25 = 240 s. Lower = everything cools more slowly
-    HeatCoolHotBoost    = 1.3,    -- extra cooling at the HOT temperature, as a multiple of the base (0 = plain exponential at every temperature, 1 = twice as fast at HOT, 3 = four times)
+    HeatCoolHotBoost    = 1.3,    -- [YOUR VALUE, shipped 1] extra cooling at the HOT temperature, as a multiple of the base (0 = plain exponential at every temperature, 1 = twice as fast at HOT, 3 = four times)
     HeatCoolMultLazer   = 1,      -- cooling speed of lazers relative to props (2 = twice as fast)
     HeatCoolMultACF     = 1,      -- cooling speed of every OTHER ACF entity (capacitors, generators ...) relative to props
     HeatCoolMultRad     = 5,      -- [CHANGED 12] (15.4) cooling speed of RADIATORS relative to props (5 = five times as fast): a radiator sheds its own waste heat quickly
@@ -375,11 +399,16 @@ table.Merge(ACFLazers.Config, {
     HeatForgetBelowK    = 0.5,    -- kelvin above room temperature. A cooling entity this close to room temperature is forgotten (it costs nothing again)
     HeatSweepInterval   = 5,      -- seconds between the sweeps that forget cooled-down entities and entities that were removed
     HeatCheckInterval   = 0.1,    -- seconds between a lazer's heat checks (the damage a lazer over its limit does to itself). A beam hit / a shot is counted at once, only the checks wait
-    HeatMaxDeltaTime    = 0.25,    -- seconds. The longest "time since the last check" a heat check will act for (a lag spike cannot turn into one huge burst of heat damage)
+    HeatMaxDeltaTime    = 0.25,   -- [YOUR VALUE, shipped 0.5] seconds. The longest "time since the last check" a heat check will act for (a lag spike cannot turn into one huge burst of heat damage)
+    HeatOutputInterval  = 0.1,    -- [CHANGED 17] (15.5; radiators too since 15.6; OPTIONAL since 15.7: without this line the entities use 0.1) seconds between refreshes of a lazer's or a radiator's HEAT READOUT (the wire outputs HeatKJ / HeatF / HeatPct; a lazer's hover text too) while it holds heat, whether it is
+                                  --   firing, wanting to fire or idle (a lazer at room temperature does nothing). This is only how often the readout is refreshed: the heat itself is worked out exactly whenever
+                                  --   it is read, so no value here changes how fast anything cools. Before 15.5 a lazer's readout rode on the energy read (0.25 s with Fire held, 1 s when idle) and a radiator's on its sweep (0.25 s)
+    LazerOverlayDelay   = 0.25,   -- [CHANGED 17] (15.5; OPTIONAL since 15.7: without this line the lazer uses 0.25) seconds. ACF rebuilds an entity's hover text at most once per its OverlayDelay (ACF's default is 1 s, which the lazer used until 15.5; ACF's own
+                                  --   piledriver uses 0.1). Lower = the temperature in the hover text is fresher, a little more work per hot lazer
 
     -- WHERE THE HEAT COMES FROM. Small .. Big = a straight line over the size of the thing (see the top of this block).
-    HeatLazerSmall      = 10,      -- a firing lazer adds this many kJ of heat per kJ it spends (the draw). 1 = all of it, 5 = five times as much [CHANGED 3] (15.1: was 1; the beam's heat on props is built from this same rate, so it follows)
-    HeatLazerBig        = 30,
+    HeatLazerSmall      = 10,     -- [YOUR VALUE, shipped 5] a firing lazer adds this many kJ of heat per kJ it spends (the draw). 1 = all of it, 5 = five times as much [CHANGED 3] (15.1: was 1; the beam's heat on props is built from this same rate, so it follows)
+    HeatLazerBig        = 30,     -- [YOUR VALUE, shipped 5]
     HeatHitSmall        = 1,      -- a beam adds (the lazer's heat rate) x this x the same focus / angle / burn-through weakening as its damage to the prop it hits
     HeatHitBig          = 1,
     HeatCapSmall        = 1 / 3,  -- a capacitor adds this many kJ of heat per kJ that goes in, and again per kJ that goes out
@@ -390,10 +419,10 @@ table.Merge(ACFLazers.Config, {
     -- LAZERS: THE LIMIT AND THE DAMAGE. [CHANGED 8] (15.3: the lock-out is GONE. A lazer fires whenever it has power, however hot it is. Make your own safeguard with the wire outputs
     -- HeatPct / HeatF / HeatKJ of the lazer, and use radiators to keep it cool.)
     -- HeatLazerCapF is 100% for a lazer (0% = room temperature). Above 100% the lazer damages itself (see HeatLazerDamage, and the TURBO knobs further down for what happens past 120%).
-    HeatLazerCapF       = 900,    -- degrees Fahrenheit. 100% of a lazer. Separate from HeatHotF so the two can be tuned apart (they start equal)
+    HeatLazerCapF       = 900,    -- [YOUR VALUE, shipped 1100] degrees Fahrenheit. 100% of a lazer. Separate from HeatHotF so the two can be tuned apart (they start equal)
     HeatLazerDamage     = 4,      -- percent of the lazer's MAX HEALTH lost per second when it is twice as hot as its limit (200%). The loss grows with the SQUARE of how far over the limit it is: half as
     --                               far over (150%) = a quarter of this, 10% over = 1/100 of this. 0 = lazers never hurt themselves
-    HeatExplodeChance   = 0.8,    -- 0..1. A lazer that dies from its own heat WHILE FIRING explodes with this chance; otherwise (and always when it was not firing) it just dies
+    HeatExplodeChance   = 0.8,    -- [YOUR VALUE, shipped 0.5] 0..1. A lazer that dies from its own heat WHILE FIRING explodes with this chance; otherwise (and always when it was not firing) it just dies
     HeatExplodeKJMult   = 2,      -- the explosion's energy = this x the lazer's draw (kJ per second), turned into HE filler the way a capacitor does (kJ / ACF.HEPower, so NOT literal kg)
     HeatExplosionMult   = 1,      -- multiplier on that filler. 1 = exactly the HE equivalent; raise it for bigger bangs
     HeatDeathDebrisPower = 20000, -- [GUESS] how hard the pieces fly when a lazer simply dies of heat (not capped by anything but MaxDebrisPower)
@@ -452,7 +481,7 @@ table.Merge(ACFLazers.Config, {
     --                             holds more heat for the same waste, so it runs cooler (the tool shows where each size settles)
     RadArmourAtOne    = 40,     -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod)
     RadHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
-    RadMaxPerPlayer   = 10,     -- default for the server variable sbox_maxacf_radiators (how many radiators one player may have)
+    RadMaxPerPlayer   = 40,     -- [CHANGED 19] (15.7: was 10) default for the server variable sbox_maxacf_radiators (how many radiators one player may have)
     -- REACH AND RATE. Radius runs in a straight line along the width. The sap rate is the heat one radiator takes out per second (the "scalar" for how much heat it can eat).
     RadRadiusSmall    = 300,    -- units, for RadWidthMin
     RadRadiusBig      = 800,    -- units, for RadWidthMax
@@ -514,6 +543,19 @@ table.Merge(ACFLazers.Config, {
     RadFlushFadeSeconds = 0.8,    -- [CHANGED 14] seconds the burst and the hiss take to fade out when the flush ends (0 = they stop at once). Both are stopped for good a moment after the fade
     RadFlushPitchSmall  = 125,    -- the pitch of the hiss of the narrowest radiator (100 = normal) ...
     RadFlushPitchBig    = 80,     -- ... and of the widest
+
+    -- THE SECOND MODEL, THE ROUNDSINK. [CHANGED 20] (15.8) The tool's model selector swaps between RadModel (the heatsink, the box) and this one (a cylinder). All of these are OPTIONAL: a config
+    -- without them uses the numbers written here. The slider of this model is its RADIUS in units. "The same per volume": a roundsink is worked out as the heatsink that has the same VOLUME
+    -- (its mass, reach, sap rate, waste, flush pitch and tank follow that heatsink's width, with the heatsink's rules above), so one roundsink and one heatsink of equal volume behave the same.
+    -- A radius of 13 is about the volume of a heatsink 32 wide; a radius of 24 is about the volume of the biggest heatsink (60 wide, RadWidthMax). [CHANGED 21] (15.9) Past that (radius 24 and a little
+    -- more, up to radius 30) its mass and sap rate are the biggest heatsink's TIMES how many times its volume it has (twice the volume, twice the mass and the sap rate: the same as a pool of that many
+    -- biggest heatsinks), and its reach keeps growing along the width of the heatsink of that volume. That is always so: there is no switch. The tool shows the radius; the diameter is twice it.
+    RadRoundModel     = "models/lasers/roundsink.mdl", -- the cylinder. If the file is missing a roundsink refuses to spawn and says so
+    RadRoundRadius    = 13,     -- units. Its radius at scale 1 (the model scale is the slider / this). [GUESS] your number: the mesh in the file measures 13.8 across the widest part
+    RadRoundHeight    = 46,     -- units. Its height at scale 1 (it scales evenly: the height grows with the radius). [GUESS] your number: the mesh in the file is 46.2 tall
+    RadRoundMin       = 12,     -- units. The smallest radius the tool can make (a diameter of 24: scale 0.92)
+    RadRoundMax       = 30,     -- units. The biggest: a DIAMETER of 60 (scale 2.31: 106 tall). [CHANGED 21] (15.8 had 60 here, a radius; it was meant as a diameter.) 1.95 times the volume of the biggest heatsink
+    RadRoundDefault   = 13,     -- units. The starting value of the slider when this model is picked (13 = the model as it is, scale 1)
 
 
     -- ===================== LINKING TOOLS =====================
@@ -986,24 +1028,119 @@ end
 
 -- ===================== RADIATOR HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 5]
 
---- A width coming from the tool, a dupe or a console command, made safe: a whole number of units between RadWidthMin and RadWidthMax (anything that is not a number becomes RadWidthDefault).
-function ACFLazers.ClampRadWidth(width)
-    local C = ACFLazers.Config
+-- [CHANGED 20] (15.8) THE TWO KINDS. A radiator is a "heatsink" (the box, RadModel) or a "roundsink" (the cylinder, RadRoundModel). Every size function below takes the number the tool
+-- slider shows (a heatsink's WIDTH, a roundsink's RADIUS, in units) and, LAST, the kind. Leave the kind out and it is the heatsink: nothing the heatsink had before 15.8 changed. What makes the two
+-- "the same per volume": a radiator is worked out as the HEATSINK OF THE SAME VOLUME (GetRadEquivWidth); mass, reach, sap rate, waste, flush pitch all follow that width.
 
-    return math.Round(ACFLazers.ClampNumber(width, C.RadWidthDefault, C.RadWidthMin, C.RadWidthMax))
+--- The kinds, in the order the tool lists them.
+function ACFLazers.GetRadKinds()
+    return { "heatsink", "roundsink" }
 end
 
---- 0 at the narrowest radiator ... 1 at the widest. Mass, radius, sap rate and waste all use it.
-function ACFLazers.GetRadSizeFraction(width)
+--- A kind from the tool, a dupe or the network made safe: "roundsink" or "heatsink". Anything else (nothing, a number, another word; a dupe from before 15.8 has no kind) is the heatsink.
+function ACFLazers.ClampRadKind(kind)
+    if kind == "roundsink" then return "roundsink" end
+
+    return "heatsink"
+end
+
+--- What defines a kind: `model`, `ref` (the slider's measure at scale 1: a heatsink's width, a roundsink's radius), `volume1` (cubic units of the shape at scale 1: the box for a heatsink, the
+--- cylinder for a roundsink), the slider's `min`, `max` and `default`, `word` ("Width" / "Radius"), `label` (the selector's text) and `base` (true for the heatsink, the reference).
+function ACFLazers.GetRadKind(kind)
+    local C = ACFLazers.Config
+
+    if ACFLazers.ClampRadKind(kind) == "roundsink" then
+        local radius = math.max(tonumber(C.RadRoundRadius) or 13, 0.0001)
+        local height = math.max(tonumber(C.RadRoundHeight) or 46, 0.0001)
+        local low    = math.max(tonumber(C.RadRoundMin) or 12, 0)
+        local high   = math.max(tonumber(C.RadRoundMax) or 30, low)
+        local model  = C.RadRoundModel
+
+        if not isstring(model) or model == "" then model = "models/lasers/roundsink.mdl" end
+
+        return { key = "roundsink", base = false, label = "Roundsink (cylinder)", word = "Radius", model = model, ref = radius, volume1 = math.pi * radius * radius * height,
+                 min = low, max = high, default = math.Clamp(tonumber(C.RadRoundDefault) or radius, low, high) }
+    end
+
+    return { key = "heatsink", base = true, label = "Heatsink (box)", word = "Width", model = C.RadModel, ref = C.RadModelWidth,
+             volume1 = C.RadModelWidth * C.RadModelLength * C.RadModelHeight, min = C.RadWidthMin, max = C.RadWidthMax, default = C.RadWidthDefault }
+end
+
+--- A size coming from the tool, a dupe or a console command, made safe: a whole number of units between the kind's smallest and biggest (anything that is not a number becomes the kind's start).
+--- For the heatsink: between RadWidthMin and RadWidthMax (anything that is not a number becomes RadWidthDefault).
+function ACFLazers.ClampRadWidth(width, kind)
+    local info = ACFLazers.GetRadKind(kind)
+
+    return math.Round(ACFLazers.ClampNumber(width, info.default, info.min, info.max))
+end
+
+--- Model scale for a size in units (1 = the model as it is): width / RadModelWidth for a heatsink, radius / RadRoundRadius for a roundsink.
+function ACFLazers.GetRadScale(width, kind)
+    local C   = ACFLazers.Config
+    local ref = C.RadModelWidth
+
+    if ACFLazers.ClampRadKind(kind) == "roundsink" then ref = tonumber(C.RadRoundRadius) or 13 end
+
+    return width / math.max(ref, 0.0001)
+end
+
+--- Cubic units of the radiator's shape: the box (a heatsink) or the cylinder (a roundsink), at the scale of this size.
+function ACFLazers.GetRadVolume(width, kind)
+    local scale = ACFLazers.GetRadScale(width, kind)
+
+    return ACFLazers.GetRadKind(kind).volume1 * scale * scale * scale
+end
+
+--- THE WIDTH OF THE HEATSINK THAT HAS THE SAME VOLUME. For a heatsink it is the width itself (the reference, answered as it always was). For a roundsink: the width of a box shaped like the
+--- RadModel, scaled evenly, with the cylinder's volume. This is the one number the "same per volume" rule is made of.
+function ACFLazers.GetRadEquivWidth(width, kind)
+    local C    = ACFLazers.Config
+    local info = ACFLazers.GetRadKind(kind)
+
+    if info.base then return tonumber(width) or info.default end
+
+    local size   = ACFLazers.ClampNumber(width, info.default, info.min, info.max)
+    local base   = C.RadModelWidth * C.RadModelLength * C.RadModelHeight
+    local volume = info.volume1 * (size / info.ref) ^ 3
+
+    return C.RadModelWidth * (volume / math.max(base, 1e-9)) ^ (1 / 3)
+end
+
+--- 0 at the narrowest heatsink ... 1 at the widest (held between). A roundsink counts by the width of the heatsink that has its volume. Mass, radius, sap rate and waste all use it.
+function ACFLazers.GetRadSizeFraction(width, kind)
     local C    = ACFLazers.Config
     local span = math.max(C.RadWidthMax - C.RadWidthMin, 0.0001)
 
-    return math.Clamp(((tonumber(width) or C.RadWidthDefault) - C.RadWidthMin) / span, 0, 1)
+    return math.Clamp((ACFLazers.GetRadEquivWidth(width, kind) - C.RadWidthMin) / span, 0, 1)
 end
 
---- Model scale for a width in units (1 = the model as it is).
-function ACFLazers.GetRadScale(width)
-    return width / math.max(ACFLazers.Config.RadModelWidth, 0.0001)
+--- How many times the volume of the BIGGEST heatsink this radiator has, when it has more; otherwise 1. A heatsink is always 1 (its size is held in its own range). Always on since 15.9 (the switch RadBeyondMax is gone).
+--- The mass and the sap rate of a roundsink bigger than the biggest heatsink are multiplied by it: they grow in proportion to the volume.
+local function RadBeyond(width, kind)
+    local C = ACFLazers.Config
+
+    if ACFLazers.ClampRadKind(kind) == "heatsink" then return 1 end
+
+    local equiv = ACFLazers.GetRadEquivWidth(width, kind)
+    local top   = math.max(C.RadWidthMax, 0.0001)
+
+    if equiv <= top then return 1 end
+
+    return (equiv / top) ^ 3
+end
+
+ACFLazers.GetRadBeyond = RadBeyond
+
+--- The same as GetRadSizeFraction, except that a radiator with more volume than the biggest heatsink goes on past 1 along the same line (the reach uses it).
+local function RadReachFraction(width, kind)
+    local C = ACFLazers.Config
+    local t = ACFLazers.GetRadSizeFraction(width, kind)
+
+    if t >= 1 and RadBeyond(width, kind) > 1 then
+        t = (ACFLazers.GetRadEquivWidth(width, kind) - C.RadWidthMin) / math.max(C.RadWidthMax - C.RadWidthMin, 0.0001)
+    end
+
+    return t
 end
 
 --- Along the size, as a power law between two ends (a straight line on log-log paper): `small` at t = 0 and `big` at t = 1, the same factor for every step.
@@ -1014,36 +1151,36 @@ local function RadGeometric(t, small, big)
     return small * (big / small) ^ t
 end
 
---- Mass in kg of a radiator this wide.
-function ACFLazers.GetRadMass(width)
+--- Mass in kg of a radiator this size.
+function ACFLazers.GetRadMass(width, kind)
     local C = ACFLazers.Config
 
-    return math.max(1, math.Round(RadGeometric(ACFLazers.GetRadSizeFraction(width), C.RadMassMin, C.RadMassMax)))
+    return math.max(1, math.Round(RadGeometric(ACFLazers.GetRadSizeFraction(width, kind), C.RadMassMin, C.RadMassMax) * RadBeyond(width, kind)))
 end
 
---- Radius in units: a straight line from RadRadiusSmall to RadRadiusBig along the width, as a WHOLE number (what the radiator reaches, what the sphere draws and what every text says
---- is the same number: a half would print differently in different places).
-function ACFLazers.GetRadRadius(width)
+--- Radius in units: a straight line from RadRadiusSmall to RadRadiusBig along the width (of the heatsink of the same volume), as a WHOLE number (what the radiator reaches, what the sphere draws
+--- and what every text says is the same number: a half would print differently in different places).
+function ACFLazers.GetRadRadius(width, kind)
     local C = ACFLazers.Config
 
-    return math.Round(Lerp(ACFLazers.GetRadSizeFraction(width), C.RadRadiusSmall, C.RadRadiusBig))
+    return math.Round(Lerp(RadReachFraction(width, kind), C.RadRadiusSmall, C.RadRadiusBig))
 end
 
 --- kJ per second the radiator tries to take out (with a full tank). RadSapSmall at the narrowest, RadSapBig at the widest; in between a mix of a straight line and the power law (RadSapCurve).
-function ACFLazers.GetRadSap(width)
+function ACFLazers.GetRadSap(width, kind)
     local C      = ACFLazers.Config
-    local t      = ACFLazers.GetRadSizeFraction(width)
+    local t      = ACFLazers.GetRadSizeFraction(width, kind)
     local linear = Lerp(t, C.RadSapSmall, C.RadSapBig)
     local mix    = math.Clamp(tonumber(C.RadSapCurve) or 0, 0, 1)
 
-    return Lerp(mix, linear, RadGeometric(t, C.RadSapSmall, C.RadSapBig))
+    return Lerp(mix, linear, RadGeometric(t, C.RadSapSmall, C.RadSapBig)) * RadBeyond(width, kind)
 end
 
 --- Waste heat as a share of the kJ the radiator tries to remove.
-function ACFLazers.GetRadWaste(width)
+function ACFLazers.GetRadWaste(width, kind)
     local C = ACFLazers.Config
 
-    return math.max(Lerp(ACFLazers.GetRadSizeFraction(width), C.RadWasteSmall, C.RadWasteBig), 0)
+    return math.max(Lerp(ACFLazers.GetRadSizeFraction(width, kind), C.RadWasteSmall, C.RadWasteBig), 0)
 end
 
 --- The radiator's efficiency (0..1) at a heat of `pct` (1 = 100% of HOT): full up to RadEffStartPct, a straight line down to RadEffFloorPct at 100%, and that floor above.
@@ -1151,21 +1288,29 @@ function ACFLazers.GetCoolingSettleK(waste, capacity, mult)
     return (-p + math.sqrt(p * p + 4 * q * waste)) / (2 * q)
 end
 
---- What the tool shows for a width: the numbers of the radiator. Everything is worked out with the same functions the radiator uses.
+--- What the tool shows for a size and a kind: the numbers of the radiator. Everything is worked out with the same functions the radiator uses. [CHANGED 20] Also `kind`, `word`, `equiv` (the
+--- width of the heatsink with the same volume), `volume` (cubic units) and `beyond` (times the volume of the biggest heatsink, 1 when it has no more).
 --- `settle` = where its own heat levels off (percent of HOT as a fraction, 1 = 100%) when it works flat out for ever, `eff` = its efficiency there, `net` = the kJ/s it takes out then.
-function ACFLazers.GetRadReadout(width)
+function ACFLazers.GetRadReadout(width, kind)
     local C        = ACFLazers.Config
-    local w        = ACFLazers.ClampRadWidth(width)
-    local mass     = ACFLazers.GetRadMass(w)
+    kind           = ACFLazers.ClampRadKind(kind)
+    local w        = ACFLazers.ClampRadWidth(width, kind)
+    local mass     = ACFLazers.GetRadMass(w, kind)
     local capacity = ACFLazers.GetHeatCapacity(mass)
-    local sap      = ACFLazers.GetRadSap(w)
-    local waste    = ACFLazers.GetRadWaste(w)
+    local sap      = ACFLazers.GetRadSap(w, kind)
+    local waste    = ACFLazers.GetRadWaste(w, kind)
     local settle   = ACFLazers.GetCoolingSettleK(sap * waste, capacity, C.HeatCoolMultRad) / ACFLazers.GetHeatRiseHot()
     local eff      = ACFLazers.GetRadEfficiency(settle)
-    local show     = { width = w, scale = ACFLazers.GetRadScale(w), mass = mass, capacity = capacity, radius = ACFLazers.GetRadRadius(w), sap = sap, wasteFrac = waste, settle = settle, eff = eff, net = sap * eff }
+    local show     = { width = w, scale = ACFLazers.GetRadScale(w, kind), mass = mass, capacity = capacity, radius = ACFLazers.GetRadRadius(w, kind), sap = sap, wasteFrac = waste, settle = settle, eff = eff, net = sap * eff }
+
+    show.kind   = kind -- [CHANGED 20]
+    show.word   = ACFLazers.GetRadKind(kind).word
+    show.equiv  = ACFLazers.GetRadEquivWidth(w, kind)
+    show.volume = ACFLazers.GetRadVolume(w, kind)
+    show.beyond = RadBeyond(w, kind)
 
     -- [CHANGED 11] the tank: litres, how fast a flush empties it, and the extra kJ/s a flush takes out of the hot parts while it lasts
-    show.liters    = ACFLazers.GetRadCoolantCapacity(w)
+    show.liters    = ACFLazers.GetRadCoolantCapacity(w, kind)
     show.flushRate = ACFLazers.GetRadFlushRate(show.liters)
     show.flushKJ   = show.flushRate * math.max(C.RadFlushKJPerLiter, 0)
 
@@ -1174,12 +1319,14 @@ end
 
 -- ===================== RADIATOR COOLANT HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 11]
 
---- Litres a FULL tank of a radiator this wide holds: RadCoolantBoxFrac of the volume of its bounding box. The box is RadModelWidth x RadModelLength x RadModelHeight units at scale 1
---- and grows with the cube of the scale; a cubic unit is RadCoolantLitersPerUnit3 litres (ACF reads a unit as an inch).
-function ACFLazers.GetRadCoolantCapacity(width)
+--- Litres a FULL tank of a radiator this size holds: RadCoolantBoxFrac of its volume. The volume is the box of the heatsink (RadModelWidth x RadModelLength x RadModelHeight units at scale 1)
+--- or the cylinder of the roundsink (pi x radius x radius x height at scale 1), and grows with the cube of the scale; a cubic unit is RadCoolantLitersPerUnit3 litres (ACF reads a unit as
+--- an inch). [CHANGED 20] Both by their own volume, so equal volumes hold equal tanks.
+function ACFLazers.GetRadCoolantCapacity(width, kind)
     local C      = ACFLazers.Config
-    local scale  = ACFLazers.GetRadScale(ACFLazers.ClampNumber(width, C.RadWidthDefault, 0, math.huge))
-    local volume = C.RadModelWidth * C.RadModelLength * C.RadModelHeight * scale * scale * scale
+    local info   = ACFLazers.GetRadKind(kind)
+    local scale  = ACFLazers.GetRadScale(ACFLazers.ClampNumber(width, info.default, 0, math.huge), kind)
+    local volume = info.volume1 * scale * scale * scale
 
     return math.max(volume * C.RadCoolantBoxFrac * C.RadCoolantLitersPerUnit3, 0) -- (a knob below 0 gives no tank)
 end
@@ -1231,10 +1378,27 @@ function ACFLazers.PickRadPuffMaterial(r)
 end
 
 --- The pitch (100 = normal) of the steam hiss of a radiator this wide: a straight line from RadFlushPitchSmall (narrowest) to RadFlushPitchBig (widest), kept in the range a sound can have.
-function ACFLazers.GetRadFlushPitch(width)
+function ACFLazers.GetRadFlushPitch(width, kind)
     local C = ACFLazers.Config
 
-    return math.Clamp(Lerp(ACFLazers.GetRadSizeFraction(width), tonumber(C.RadFlushPitchSmall) or 100, tonumber(C.RadFlushPitchBig) or 100), 1, 255)
+    return math.Clamp(Lerp(ACFLazers.GetRadSizeFraction(width, kind), tonumber(C.RadFlushPitchSmall) or 100, tonumber(C.RadFlushPitchBig) or 100), 1, 255)
+end
+
+--- [CHANGED 20] Where on the top of the model a puff of steam starts, in the model's own x and y: `r1` and `r2` are random numbers from 0 up to 1 and the box is the model's bounds. A heatsink's
+--- top is a rectangle (the whole box); a roundsink's is a DISC in the middle of the box (the corners of the box are outside the cylinder). The disc is filled evenly.
+function ACFLazers.PickRadPuffSpot(kind, r1, r2, minx, maxx, miny, maxy)
+    r1 = math.Clamp(tonumber(r1) or 0, 0, 1)
+    r2 = math.Clamp(tonumber(r2) or 0, 0, 1)
+
+    if ACFLazers.ClampRadKind(kind) == "roundsink" then
+        local cx, cy = (minx + maxx) / 2, (miny + maxy) / 2
+        local rad    = math.min(maxx - minx, maxy - miny) / 2 * math.sqrt(r2)
+        local ang    = r1 * math.pi * 2
+
+        return cx + math.cos(ang) * rad, cy + math.sin(ang) * rad
+    end
+
+    return minx + r1 * (maxx - minx), miny + r2 * (maxy - miny)
 end
 
 --- The steam colour as ONE whole number for the network (the client gets a single value): red * 65536 + green * 256 + blue. The inputs are made safe first.

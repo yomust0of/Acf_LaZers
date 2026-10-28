@@ -3,6 +3,10 @@
 -- Goes to:  lua/entities/acf_radiator/init.lua      (the server runs this one. The CLIENT file is cl_init.lua next to it: never put this file there)
 --           NEEDS the 15.4 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua: it refuses to load without them. The HeatOutputInterval knob is OPTIONAL (15.7): without it the readout timer uses 0.1 s
 --
+-- 15.9 (search for [CHANGED 6]): the roundsink's hover text also says its DIAMETER (the tool's range is radius 12 to 30 now, a diameter of 24 to 60); the load message names the 15.9 config.
+-- 15.8 (search for [CHANGED 5]): THE SECOND MODEL, THE ROUNDSINK. A radiator has a KIND (the plain field Kind, saved by the duplicator; "heatsink" when a dupe has none) and every size function
+--   of the config takes it. The tool's model selector decides which model a new radiator gets, and updating a radiator with the other kind swaps its model. "The same per volume": a roundsink
+--   works like the heatsink of the same volume (see ACFLazers.GetRadEquivWidth in the config).
 -- 15.7 (search for [CHANGED 4]): THE READOUT KNOB IS OPTIONAL. 15.6 stopped this file at its first lines when the config had no HeatOutputInterval, and a file that stops there leaves an EMPTY SHELL of a
 --   class behind (no hover text, no wire outputs, stock size). Without the knob the readout timer uses 0.1 s now; nothing about the readout can stop this file. The radiator's limit variable
 --   (sbox_maxacf_radiators) takes its default from RadMaxPerPlayer (config, 40 since 15.7; 40 also when the config has none).
@@ -51,8 +55,8 @@ if not (ACFLazers.Heat and ACFLazers.Heat.Add and ACFLazers.GetHeatCapacity) the
     return
 end
 
-if not (ACFLazers.GetRadSap and ACFLazers.RadPoolStep and ACFLazers.WeightedFill and ACFLazers.GetRadCoolantCapacity and ACFLazers.GetHeatCoolRate) then
-    ErrorNoHalt("[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator or coolant knobs or helpers). Copy the config of the same batch (15.4), then restart.\n")
+if not (ACFLazers.GetRadSap and ACFLazers.RadPoolStep and ACFLazers.WeightedFill and ACFLazers.GetRadCoolantCapacity and ACFLazers.GetHeatCoolRate and ACFLazers.GetRadKind and ACFLazers.GetRadEquivWidth) then
+    ErrorNoHalt("[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator or coolant knobs or helpers). Copy the config of the same batch (15.9), then restart.\n")
     return
 end
 
@@ -61,7 +65,7 @@ local Heat = ACFLazers.Heat
 -- [CHANGED 4] (15.7) The knob of the heat-readout timer (HeatOutputInterval) is OPTIONAL: the timer below uses 0.1 s when the config has none. (15.6 returned from this file here, and a file that
 -- stops at its first lines leaves an empty shell of a class behind.)
 
-local VERSION = "15.7"
+local VERSION = "15.9"
 MsgN("[acf_radiator] init.lua version " .. VERSION .. " loaded")
 
 -- How many radiators one player may own (GMod reads a server variable called sbox_max<name>; CreateConVar does nothing if it already exists).
@@ -201,7 +205,7 @@ function Rad.RunGroup(group, now, dt)
     local items = {}
 
     for i, radiator in ipairs(live) do
-        local sap = ACFLazers.GetRadSap(radiator:GetWidth()) * radiator.CoolantMult -- [CHANGED 2] no overclock: the table's rate times the strength the tank gives
+        local sap = ACFLazers.GetRadSap(radiator:GetWidth(), radiator:GetKind()) * radiator.CoolantMult -- [CHANGED 2] no overclock: the table's rate times the strength the tank gives
 
         radiator.NominalSap = sap
         radiator.Efficiency = ACFLazers.GetRadEfficiency(radiator:GetHeatPct())
@@ -244,7 +248,7 @@ function Rad.RunGroup(group, now, dt)
     for i, radiator in ipairs(live) do
         local step = out[i]
 
-        if step.work > 0 then Heat.Add(radiator, step.work * ACFLazers.GetRadWaste(radiator:GetWidth())) end
+        if step.work > 0 then Heat.Add(radiator, step.work * ACFLazers.GetRadWaste(radiator:GetWidth(), radiator:GetKind())) end
 
         radiator.Attempted = dt > 0 and step.work / dt or 0
         radiator.SapRate   = dt > 0 and step.removed / dt or 0
@@ -315,6 +319,7 @@ end
 
 function ENT:Initialize()
     self.Width          = CFG.RadWidthDefault
+    self.Kind           = "heatsink" -- [CHANGED 5] ApplyData sets the real one
     self.Links          = {}      -- the radiators linked to this one (a set)
     self.Members        = setmetatable({}, { __mode = "k" }) -- the parts it can cool (a set, rebuilt by RebuildMembers)
     self.MemberCount    = 0
@@ -375,23 +380,25 @@ end
 
 -- Clamp whatever the tool / a dupe / an update sends us (the server never trusts the client).
 local function VerifyData(Data)
-    Data.Width = ACFLazers.ClampRadWidth(Data.Width)
+    Data.Kind  = ACFLazers.ClampRadKind(Data.Kind) -- [CHANGED 5]
+    Data.Width = ACFLazers.ClampRadWidth(Data.Width, Data.Kind)
 
     Data.CoolantR, Data.CoolantG, Data.CoolantB = ACFLazers.ClampRadColor(Data.CoolantR, Data.CoolantG, Data.CoolantB) -- [CHANGED 1] the colour of the steam
 end
 
 -- Model, scale, ACF health and mass for a width. Same order the lazer, the capacitor and the generator use: scale first (that makes the physics object), then ACF.Activate, then the mass.
-function ENT:ApplyScale(width)
-    self:SetScaledModel(CFG.RadModel)
-    self:SetScale(ACFLazers.GetRadScale(width))
+function ENT:ApplyScale(width, kind)
+    self:SetScaledModel(ACFLazers.GetRadKind(kind).model) -- [CHANGED 5] the kind's model (a different one than before swaps the model)
+    self:SetScale(ACFLazers.GetRadScale(width, kind))
 
     ACF.Activate(self, true)
-    Contraption.SetMass(self, ACFLazers.GetRadMass(width))
+    Contraption.SetMass(self, ACFLazers.GetRadMass(width, kind))
 end
 
 -- Apply a whole Data table {Width = units}. Used by spawn AND by update. Width is a plain field on purpose: the duplicator saves entity fields (see Entities.Register at the bottom).
 function ENT:ApplyData(Data)
-    if self.TankReady then -- an update that says nothing about the colour keeps the colour it has
+    if self.TankReady then -- an update that says nothing about the colour keeps the colour it has; one whose kind is not one of ours (nothing, junk) keeps the model it has
+        if Data.Kind ~= "heatsink" and Data.Kind ~= "roundsink" then Data.Kind = self.Kind end
         if Data.CoolantR == nil then Data.CoolantR = self.CoolantR end
         if Data.CoolantG == nil then Data.CoolantG = self.CoolantG end
         if Data.CoolantB == nil then Data.CoolantB = self.CoolantB end
@@ -399,19 +406,21 @@ function ENT:ApplyData(Data)
 
     VerifyData(Data)
 
+    self.Kind  = Data.Kind -- [CHANGED 5] a plain field like Width: the duplicator saves it
     self.Width = Data.Width
-    self.Name  = string.format("%d-unit Radiator", Data.Width) -- the undo list uses Entity.Name
+    self.Name  = Data.Kind == "roundsink" and string.format("%d-radius Roundsink", Data.Width) or string.format("%d-unit Radiator", Data.Width) -- the undo list uses Entity.Name
 
     self.CoolantR, self.CoolantG, self.CoolantB = Data.CoolantR, Data.CoolantG, Data.CoolantB -- [CHANGED 1] plain fields: the duplicator saves them (see Entities.Register)
 
+    self:SetNW2String("ACFRadKind", self.Kind) -- [CHANGED 5]
     self:SetNW2Int("ACFRadWidth", self.Width)
     self:SetNW2Int("ACFRadColor", ACFLazers.PackRadColor(self.CoolantR, self.CoolantG, self.CoolantB)) -- one number for the client: red * 65536 + green * 256 + blue
-    self:ApplyScale(Data.Width)
+    self:ApplyScale(Data.Width, Data.Kind)
 
     -- [CHANGED 1] the tank follows the size. A new radiator starts at RadCoolantStart; one that is resized keeps its level (its share of the tank).
     local level = self.TankReady and (self.Capacity > 0 and self.Amount / self.Capacity or 0) or ACFLazers.ClampNumber(CFG.RadCoolantStart, 1, 0, 1)
 
-    self.Capacity  = ACFLazers.GetRadCoolantCapacity(Data.Width)
+    self.Capacity  = ACFLazers.GetRadCoolantCapacity(Data.Width, Data.Kind)
     self.Amount    = math.Clamp(level, 0, 1) * self.Capacity
     self.TankReady = true
 
@@ -426,7 +435,8 @@ function ENT:ACF_Activate(Recalc)
     local PhysObj = SelfACF.PhysObj
 
     local Area    = (PhysObj:GetSurfaceArea() or 0) * ACF.InchToCmSq
-    local Armour  = CFG.RadArmourAtOne * ACFLazers.GetRadScale(self.Width or CFG.RadWidthDefault) * ACF.ArmorMod
+    local Kind    = self:GetKind()
+    local Armour  = CFG.RadArmourAtOne * ACFLazers.GetRadScale(self.Width or ACFLazers.GetRadKind(Kind).default, Kind) * ACF.ArmorMod
     local Health  = Area / ACF.Threshold * CFG.RadHealthMult
     local Percent = 1
 
@@ -467,7 +477,7 @@ function ENT:RebuildMembers(now)
 
     if contraption and contraption.ents then
         local center  = self:WorldSpaceCenter()
-        local radius  = ACFLazers.GetRadRadius(self:GetWidth())
+        local radius  = ACFLazers.GetRadRadius(self:GetWidth(), self:GetKind())
         local radius2 = radius * radius
 
         for ent in pairs(contraption.ents) do
@@ -554,7 +564,7 @@ function ENT:SetVenting(on)
     self:SetNW2Bool("ACFRadVent", on)
 
     if on then
-        local pitch  = math.floor(ACFLazers.GetRadFlushPitch(self:GetWidth()) + 0.5)
+        local pitch  = math.floor(ACFLazers.GetRadFlushPitch(self:GetWidth(), self:GetKind()) + 0.5)
         local volume = ACFLazers.ClampNumber(CFG.RadFlushVolume, 0.9, 0, 1)
 
         self.VentBurst = StartSound(self, CFG.RadFlushStartSound, volume, pitch)
@@ -616,7 +626,7 @@ function ENT:UpdateStatus()
         self.Status     = string.format("OUT OF COOLANT: working at %.0f%% strength. A supply crate refills it", ACFLazers.GetRadCoolantMult(0) * 100)
     elseif self.MemberCount == 0 then
         self.StatusKind = "empty"
-        self.Status     = string.format("No other part of its contraption is within %.0f units", ACFLazers.GetRadRadius(self:GetWidth()))
+        self.Status     = string.format("No other part of its contraption is within %.0f units", ACFLazers.GetRadRadius(self:GetWidth(), self:GetKind()))
     elseif self.HotParts == 0 then
         self.StatusKind = "cold"
         self.Status     = string.format("Nothing in range is hot (%d parts in range)", self.MemberCount)
@@ -638,7 +648,7 @@ function ENT:UpdateWireOutputs()
     WireLib.TriggerOutput(self, "Members", self.MemberCount)
     WireLib.TriggerOutput(self, "HotParts", self.HotParts)
     WireLib.TriggerOutput(self, "Pool", self.PoolSize)
-    WireLib.TriggerOutput(self, "Radius", ACFLazers.GetRadRadius(self:GetWidth()))
+    WireLib.TriggerOutput(self, "Radius", ACFLazers.GetRadRadius(self:GetWidth(), self:GetKind()))
     -- [CHANGED 3] (15.6) HeatKJ / HeatF / HeatPct are written by HeatReadout, on their own clock (they used to be written here, with every sweep)
     WireLib.TriggerOutput(self, "Coolant", self.Amount)
     WireLib.TriggerOutput(self, "CoolantPct", self:GetFill() * 100)
@@ -679,10 +689,16 @@ function ENT:ACF_UpdateOverlayState(State)
     end
 
     local width = self:GetWidth()
+    local kind  = self:GetKind()
 
-    State:AddKeyValue("Size", string.format("%d units wide (model scale %.2f), %d kg", width, ACFLazers.GetRadScale(width), ACFLazers.GetRadMass(width)))
-    State:AddKeyValue("Radius", string.format("%.0f units, %d parts in range", ACFLazers.GetRadRadius(width), self.MemberCount))
-    State:AddKeyValue("Sap rate", string.format("%.0f kJ/s with a full tank (%.0f kJ/s tried now)", ACFLazers.GetRadSap(width), self.NominalSap))
+    if kind == "roundsink" then -- [CHANGED 5]
+        State:AddKeyValue("Size", string.format("radius %d units, diameter %d (model scale %.2f), %d kg, as much volume as a heatsink %.0f units wide", width, width * 2, ACFLazers.GetRadScale(width, kind), ACFLazers.GetRadMass(width, kind), ACFLazers.GetRadEquivWidth(width, kind))) -- [CHANGED 6]
+    else
+        State:AddKeyValue("Size", string.format("%d units wide (model scale %.2f), %d kg", width, ACFLazers.GetRadScale(width), ACFLazers.GetRadMass(width)))
+    end
+
+    State:AddKeyValue("Radius", string.format("%.0f units, %d parts in range", ACFLazers.GetRadRadius(width, kind), self.MemberCount))
+    State:AddKeyValue("Sap rate", string.format("%.0f kJ/s with a full tank (%.0f kJ/s tried now)", ACFLazers.GetRadSap(width, kind), self.NominalSap))
     State:AddKeyValue("Taking out", string.format("%.0f kJ/s (efficiency %.0f%%)", self.SapRate, self.Efficiency * 100))
     State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of HOT)", Heat.GetTempF(self), self:GetHeatPct() * 100))
 
@@ -833,8 +849,11 @@ function MakeACFRadiator(ply, pos, angles, Data)
     if IsValid(ply) and not ply:CheckLimit("acf_radiators") then return nil end
 
     -- The model is your buddy's. If it is missing the scalable base cannot build a physics mesh, so say so instead of failing with a pile of errors.
-    if not util.IsValidModel(CFG.RadModel) then
-        local msg = "[acf_radiator] the model " .. CFG.RadModel .. " is missing on this server (RadModel in acf_lazers_config.lua). Is it installed and is the file name spelled right?"
+    local kind  = ACFLazers.ClampRadKind(Data.Kind) -- [CHANGED 5] the kind decides the model
+    local model = ACFLazers.GetRadKind(kind).model
+
+    if not util.IsValidModel(model) then
+        local msg = "[acf_radiator] the model " .. model .. " is missing on this server (" .. (kind == "roundsink" and "RadRoundModel" or "RadModel") .. " in acf_lazers_config.lua). Is it installed and is the file name spelled right?"
 
         ErrorNoHalt(msg .. "\n")
 
@@ -848,7 +867,7 @@ function MakeACFRadiator(ply, pos, angles, Data)
 
     -- ACF wants this table and a model BEFORE Spawn (acf_gun/init.lua:482-488)
     ent.ACF = {}
-    Contraption.SetModel(ent, CFG.RadModel)
+    Contraption.SetModel(ent, model)
 
     ent:SetPos(pos)
     ent:SetAngles(angles)
@@ -868,5 +887,5 @@ function MakeACFRadiator(ply, pos, angles, Data)
     return ent
 end
 
--- Dupe keys: Width, and (15.3) the three channels of the steam colour. A dupe from 15.2 has no colour: the default is used.
-Entities.Register("acf_radiator", MakeACFRadiator, "Width", "CoolantR", "CoolantG", "CoolantB")
+-- Dupe keys: Width, (15.8) Kind and (15.3) the three channels of the steam colour. A dupe from 15.2 has no colour: the default is used; a dupe from before 15.8 has no Kind: a heatsink.
+Entities.Register("acf_radiator", MakeACFRadiator, "Width", "Kind", "CoolantR", "CoolantG", "CoolantB")

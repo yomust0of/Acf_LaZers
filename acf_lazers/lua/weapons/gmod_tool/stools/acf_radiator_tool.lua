@@ -2,6 +2,9 @@
 -- NEW (15.2), CHANGED (15.3, 15.4). Goes to:  lua/weapons/gmod_tool/stools/acf_radiator_tool.lua
 --
 -- THE RADIATOR TOOL (based on the generator tool).
+-- (15.9) The roundsink's slider is still its RADIUS (12 to 30 now, a diameter of 24 to 60); the screen and the menu text also say the diameter. [CHANGED 4]
+-- (15.8) THE MODEL SELECTOR: a drop-down picks the heatsink (the box, the slider is its WIDTH) or the roundsink (the cylinder, the slider is its RADIUS). Picking a model puts the slider
+--   at that model's start. Left-click on a radiator of the other model changes it to the model that is selected. The numbers on the screen come from the same helpers as always.
 --   Left-click        spawn a radiator with the slider's width and the colour of the coolant (the colour picker), or update the radiator you are aiming at. The width sets the model scale,
 --                     the mass, the radius it reaches, how much heat it can take out per second and the size of its coolant tank (RadWidthMin..RadWidthMax and the Rad... knobs in the config)
 --   Right-click       LINK (from the link kit, lua/autorun/acf_lazers_linkkit.lua). Click the first thing: it turns green. Then click what to link it to. Radiators linked to each
@@ -25,8 +28,10 @@ assert(Config, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is missing
 assert(ACFLazers.LinkKit, "[acf_radiator_tool] lua/autorun/acf_lazers_linkkit.lua is missing or did not load")
 assert(ACFLazers.GetRadReadout, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator helpers). Copy the config of the same batch (15.4).")
 assert(ACFLazers.GetRadCoolantCapacity, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no coolant helpers). Copy the config of the same batch (15.4).")
+assert(ACFLazers.GetRadKind and ACFLazers.GetRadKinds, "[acf_radiator_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no radiator kinds). Copy the config of the same batch (15.9).")
 
 TOOL.ClientConVar["width"]   = Config.RadWidthDefault
+TOOL.ClientConVar["kind"]    = "heatsink" -- [CHANGED 3] (15.8) which model: "heatsink" or "roundsink"
 TOOL.ClientConVar["celsius"] = 0
 
 -- [CHANGED 1] the colour of the coolant (the steam of a flush): the config's default until the player picks another
@@ -81,15 +86,24 @@ if CLIENT then
     end
 
     -- Only works the numbers out again when the slider moved (the screen is drawn every frame).
-    local cachedWidth, cachedShow
+    local cachedWidth, cachedKind, cachedShow
+
+    -- [CHANGED 3] The model picked in the selector ("heatsink" when the variable is missing or holds anything else).
+    local function PickedKind()
+        local convar = GetConVar("acf_radiator_tool_kind")
+
+        return ACFLazers.ClampRadKind(convar and convar:GetString() or "heatsink")
+    end
 
     local function Readout()
+        local kind   = PickedKind()
         local convar = GetConVar("acf_radiator_tool_width")
-        local width  = ACFLazers.ClampRadWidth(convar and convar:GetFloat() or Config.RadWidthDefault)
+        local width  = ACFLazers.ClampRadWidth(convar and convar:GetFloat() or ACFLazers.GetRadKind(kind).default, kind)
 
-        if cachedWidth ~= width then
+        if cachedWidth ~= width or cachedKind ~= kind then
             cachedWidth = width
-            cachedShow  = ACFLazers.GetRadReadout(width)
+            cachedKind  = kind
+            cachedShow  = ACFLazers.GetRadReadout(width, kind)
         end
 
         return cachedShow
@@ -122,7 +136,10 @@ if CLIENT then
 
         y = y + BigNumber(show.sap, "kJ/s", cx, y, ColAmber) + 2
 
-        _, lh = draw.SimpleText(string.format("%d units wide, %d kg, radius %d", show.width, show.mass, math.floor(show.radius + 0.5)), "ACFLazersRadSmall", cx, y, ColWhite, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
+        local sizeLine = show.kind == "roundsink" and string.format("radius %d (diameter %d), %d kg, reach %d", show.width, show.width * 2, show.mass, math.floor(show.radius + 0.5))
+                                                  or  string.format("%d units wide, %d kg, radius %d", show.width, show.mass, math.floor(show.radius + 0.5))
+
+        _, lh = draw.SimpleText(sizeLine, "ACFLazersRadSmall", cx, y, ColWhite, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
         y = y + lh + 1
 
         _, lh = draw.SimpleText(string.format("working flat out its own heat settles at %d%% of HOT", math.floor(show.settle * 100 + 0.5)), "ACFLazersRadSmall", cx, y, ColWhite, TEXT_ALIGN_CENTER, TEXT_ALIGN_TOP)
@@ -161,8 +178,34 @@ if CLIENT then
     function TOOL.BuildCPanel(panel)
         panel:AddControl("Header", { Text = "ACF Radiator Configuration", Description = "Tune settings before spawning." })
 
-        -- The width is also the size: the model is scaled by it, and the mass, radius and sap rate follow (the Rad... knobs in the config).
-        panel:NumSlider("Width (units)", "acf_radiator_tool_width", Config.RadWidthMin, Config.RadWidthMax, 0)
+        -- [CHANGED 3] (15.8) The model selector. Picking a model sets the kind and puts the slider at that model's start; the slider's label and range follow the model.
+        local startKind = PickedKind()
+        local combo     = vgui.Create("DComboBox")
+
+        combo:SetSortItems(false)
+
+        for _, key in ipairs(ACFLazers.GetRadKinds()) do
+            combo:AddChoice(ACFLazers.GetRadKind(key).label, key, key == startKind)
+        end
+
+        panel:AddItem(combo)
+
+        -- The size is also the scale: the model is scaled by it, and the mass, radius and sap rate follow (the Rad... knobs in the config). A heatsink's is its width, a roundsink's its radius.
+        local startInfo = ACFLazers.GetRadKind(startKind)
+        local slider    = panel:NumSlider(startInfo.word .. " (units)", "acf_radiator_tool_width", startInfo.min, startInfo.max, 0)
+
+        combo.OnSelect = function(_, _, _, key)
+            local kind = ACFLazers.ClampRadKind(key)
+            local info = ACFLazers.GetRadKind(kind)
+
+            RunConsoleCommand("acf_radiator_tool_kind", kind)
+            RunConsoleCommand("acf_radiator_tool_width", tostring(info.default))
+
+            if IsValid(slider) then
+                slider:SetText(info.word .. " (units)")
+                slider:SetMinMax(info.min, info.max)
+            end
+        end
 
         local box = vgui.Create("DPanel")
 
@@ -189,21 +232,38 @@ if CLIENT then
 
         local info = panel:Help("")
 
+        -- The first sentence of the text: what this radiator is. [CHANGED 3]
+        local function Head(show)
+            if show.kind == "roundsink" then
+                local head = string.format("A roundsink radiator with a radius of %d units (a diameter of %d): model scale %.2f, mass %d kg, reach %d units. It holds as much as a heatsink %d units wide and works like one.",
+                    show.width, show.width * 2, show.scale, show.mass, math.floor(show.radius + 0.5), math.floor(show.equiv + 0.5))
+
+                if show.beyond > 1.0001 then
+                    head = head .. string.format(" That is more than the biggest heatsink (%.1f times its volume): its mass and sap rate grow in proportion, as %.1f of the biggest heatsinks in a pool would.", show.beyond, show.beyond)
+                end
+
+                return head
+            end
+
+            return string.format("A radiator %d units wide: model scale %.2f, mass %d kg, radius %d units.", show.width, show.scale, show.mass, math.floor(show.radius + 0.5))
+        end
+
         local function Refresh()
             local show = Readout()
 
             if IsValid(info) then
-                info:SetText(string.format("A radiator %d units wide: model scale %.2f, mass %d kg, radius %d units. It takes up to %s kJ/s out of the hot parts of its own contraption that are inside its radius, "
+                info:SetText(Head(show) .. string.format(" It takes up to %s kJ/s out of the hot parts of its own contraption that are inside its radius, "
                     .. "the hottest parts giving the most. Working makes waste heat (%.1f%% of the work it tries to do); from %d%% of HOT its efficiency falls to %d%% at 100%%. It never damages itself from heat, "
                     .. "and it sheds its own heat %g times as fast as a prop. Working flat out its own heat settles at %d%% of HOT.\n\n"
                     .. "Coolant: the tank holds %.1f litres. A full tank is full strength, an empty one works at %d%%. The Flush wire input vents %.1f litres a second as a cloud of steam in the colour above "
                     .. "and takes %s kJ/s of heat out of the hot parts on top. A supply crate refills the tank like a fuel tank.",
-                    show.width, show.scale, show.mass, math.floor(show.radius + 0.5), Commas(show.sap), show.wasteFrac * 100, Config.RadEffStartPct, Config.RadEffFloorPct, Config.HeatCoolMultRad,
+                    Commas(show.sap), show.wasteFrac * 100, Config.RadEffStartPct, Config.RadEffFloorPct, Config.HeatCoolMultRad,
                     math.floor(show.settle * 100 + 0.5), show.liters, math.floor(ACFLazers.GetRadCoolantMult(0) * 100 + 0.5), show.flushRate, Commas(show.flushKJ)))
             end
         end
 
         cvars.AddChangeCallback("acf_radiator_tool_width", Refresh, "acf_radiator_tool_refresh")
+        cvars.AddChangeCallback("acf_radiator_tool_kind", Refresh, "acf_radiator_tool_refresh_kind")
         Refresh()
 
         panel:AddControl("Checkbox", {
@@ -292,16 +352,20 @@ function TOOL:LeftClick(trace)
     local Entities = ACF.Classes.Entities
 
     -- The entity clamps this again server-side (VerifyData in the radiator's init.lua), so a stale ConVar is safe.
+    local kind = ACFLazers.ClampRadKind(ply:GetInfo("acf_radiator_tool_kind")) -- [CHANGED 3] (15.8) which model
+    local info = ACFLazers.GetRadKind(kind)
+
     local Data = {
-        Width    = ply:GetInfoNum("acf_radiator_tool_width", Config.RadWidthDefault),
+        Kind     = kind,
+        Width    = ply:GetInfoNum("acf_radiator_tool_width", info.default),
         CoolantR = ply:GetInfoNum("acf_radiator_tool_coolantr", Config.RadCoolantColor[1]), -- [CHANGED 1] the entity clamps all three again (VerifyData)
         CoolantG = ply:GetInfoNum("acf_radiator_tool_coolantg", Config.RadCoolantColor[2]),
         CoolantB = ply:GetInfoNum("acf_radiator_tool_coolantb", Config.RadCoolantColor[3]),
     }
 
     -- Tell the player when the server will squeeze the width into the allowed range.
-    if Data.Width < Config.RadWidthMin or Data.Width > Config.RadWidthMax then
-        Say(ply, "Info", string.format("Width limited to %d units (the allowed range is %d to %d units).", ACFLazers.ClampRadWidth(Data.Width), Config.RadWidthMin, Config.RadWidthMax))
+    if Data.Width < info.min or Data.Width > info.max then
+        Say(ply, "Info", string.format("%s limited to %d units (the allowed range is %d to %d units).", info.word, ACFLazers.ClampRadWidth(Data.Width, kind), info.min, info.max))
     end
 
     -- Aiming at one of our radiators: update it instead of spawning another

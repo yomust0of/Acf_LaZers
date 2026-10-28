@@ -11,7 +11,7 @@
 include("shared.lua")
 
 assert(ACFLazers and ACFLazers.Config, "[acf_radiator] lua/autorun/acf_lazers_config.lua is missing or did not load")
-assert(ACFLazers.GetRadRadius and ACFLazers.PickRadPuffMaterial, "[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no ACFLazers.PickRadPuffMaterial). Copy the config of the same batch.")
+assert(ACFLazers.GetRadRadius and ACFLazers.PickRadPuffMaterial and ACFLazers.PickRadPuffSpot, "[acf_radiator] lua/autorun/acf_lazers_config.lua is older than this file (it has no ACFLazers.PickRadPuffMaterial). Copy the config of the same batch.")
 
 local Config = ACFLazers.Config
 
@@ -43,7 +43,8 @@ function ENT:Think()
 
     if self:IsDormant() or (IsValid(ply) and ply:GetPos():DistToSqr(self:GetPos()) > Config.RadPuffDistance * Config.RadPuffDistance) then return true end
 
-    local scale = ACFLazers.GetRadScale(self:GetWidth())
+    local kind  = self:GetKind() -- [CHANGED 3] (15.8)
+    local scale = ACFLazers.GetRadScale(self:GetWidth(), kind)
     local count
 
     count, self.PuffCarry = ACFLazers.GetRadPuffs(scale, dt, self.PuffCarry)
@@ -65,8 +66,9 @@ function ENT:Think()
     local speed    = math.max(Config.RadPuffSpeed, 0) * scale
 
     for _ = 1, count do
-        -- a random spot on the top of the model
-        local pos = self:LocalToWorld(Vector(math.Rand(mins.x, maxs.x), math.Rand(mins.y, maxs.y), maxs.z))
+        -- a random spot on the top of the model (a rectangle for the heatsink, a disc for the roundsink)
+        local px, py = ACFLazers.PickRadPuffSpot(kind, math.Rand(0, 1), math.Rand(0, 1), mins.x, maxs.x, mins.y, maxs.y)
+        local pos = self:LocalToWorld(Vector(px, py, maxs.z))
         local puff = emitter:Add(ACFLazers.PickRadPuffMaterial(math.Rand(0, 1)), pos) -- [CHANGED 2] one of ACF's own smoke sprites (the old guess had no texture)
 
         if puff then
@@ -123,7 +125,7 @@ hook.Add("PostDrawTranslucentRenderables", "ACFLazers_RadiatorRadius", function(
 
     if not radiator then return end
 
-    local radius = ACFLazers.GetRadRadius(radiator:GetWidth())
+    local radius = ACFLazers.GetRadRadius(radiator:GetWidth(), radiator:GetKind())
     local pos    = radiator:WorldSpaceCenter()
     local rgb    = Config.RadDrawColor
     local lines  = math.Clamp(math.floor(Config.RadDrawLines), 4, 64)

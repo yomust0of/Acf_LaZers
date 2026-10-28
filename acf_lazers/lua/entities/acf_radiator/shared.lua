@@ -22,3 +22,11 @@ function ENT:GetWidth()
 
     return self:GetNW2Int("ACFRadWidth", ACFLazers.Config.RadWidthDefault)
 end
+
+-- [CHANGED 5] (15.8) The kind: "heatsink" (the box) or "roundsink" (the cylinder). The server keeps it in the plain field Kind (the duplicator saves it; a dupe from before 15.8 has none: a
+-- heatsink); the client reads the NW2 copy.
+function ENT:GetKind()
+    local kind = SERVER and self.Kind or self:GetNW2String("ACFRadKind", "heatsink")
+
+    return ACFLazers.ClampRadKind and ACFLazers.ClampRadKind(kind) or "heatsink"
+end
