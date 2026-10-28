@@ -4,7 +4,7 @@
 --           NEEDS the new config (lua/autorun/acf_lazers_config.lua) AND the new file lua/autorun/acf_lazers_heat.lua: it refuses to load without them
 --
 -- CHANGES vs the init.lua you have now (version 14). Search this file for [CHANGED n].
---   1  The version line says 15.6
+--   1  The version line says 15.5
 --   2  A LOAD-TIME CHECK for the heat system (ACFLazers.Heat, from acf_lazers_heat.lua). Missing = one clear console error and the lazer does not load
 --   3  LAZER HEAT (new section). The lazer's own heat: GetHeatPct, GetHeatRate, HeatThink, TakeHeatDamage, HeatDeath.
 --      New fields in Initialize (NextHeatCheck, LastHeatCheck) and three new wire outputs: HeatKJ, HeatF, HeatPct (percent of the lazer's limit)
@@ -18,8 +18,6 @@
 --      once a SECOND when the lazer was idle, and ACF buffers a hover text for 1 s on top. The heat itself was always exact; an idle lazer that was cooling just LOOKED slower than one with Fire
 --      held on an empty pool. New: HeatReadout (called from Think) refreshes the three outputs and the hover text every HeatOutputInterval while the lazer holds heat (and once more when it
 --      has cooled to room temperature); UpdateHeatOutputs writes them (UpdateWireOutputs does not any more: the readout has ONE owner); ENT.OverlayDelay = LazerOverlayDelay. NEEDS the 15.5 config (two knobs)
---   9  (15.6) FIX: a lazer that was never hot showed 0 on its HeatF output (the Wire default) instead of 59 F, because the readout flag started as "cold and already shown". It starts as "not yet shown"
---      now: the first readout writes the cold state (0 kJ, 59 F, 0%) once. Nothing else in this file changed.
 -- =========================================================================
 
 AddCSLuaFile("cl_init.lua")
@@ -64,7 +62,7 @@ end
 ENT.OverlayDelay = math.max(tonumber(LASER_CONFIG.LazerOverlayDelay) or 1, 0) -- [CHANGED 8] ACF's hover-text buffer for this entity (its default is 1 s)
 
 -- Which version of this file is running. It is printed to the server console when the file loads, and every notice below carries it.
-local VERSION = "15.6" -- [CHANGED 1]
+local VERSION = "15.5" -- [CHANGED 1]
 MsgN("[acf_lazer] init.lua version " .. VERSION .. " loaded")
 
 -- Diagnosis switch, now a COMMAND. Admins (in their own console) and the server console type  acf_lazer_debug 1  and fire at a prop:
@@ -189,7 +187,7 @@ function ENT:Initialize()
     self.NextHeatCheck = 0     -- [CHANGED 3] CurTime() of the next heat check (HeatThink)
     self.LastHeatCheck = CurTime() -- [CHANGED 3]
     self.NextHeatRead  = 0     -- [CHANGED 8] CurTime() of the next heat-readout refresh (HeatReadout)
-    self.HeatShown     = true  -- [CHANGED 9] (15.6) true until the readout has written the COLD state: the first refresh writes 0 kJ / 59 F / 0% even for a lazer that was never hot (15.5 started it false, so HeatF stayed at the Wire default 0)
+    self.HeatShown     = false -- [CHANGED 8] true while the readout shows a temperature above room temperature
     -- end-of-beam sounds (see the BeamSounds block below). All start empty; they are created on demand.
     self.SoundEmitter  = nil  -- the invisible entity that carries the sounds to the beam end
     self.BurnSnd       = nil  -- CSoundPatch (the object CreateSound returns): the burn loop

@@ -1,11 +1,8 @@
 -- =========================================================================
 -- ACF RADIATOR: SERVER FILE
 -- Goes to:  lua/entities/acf_radiator/init.lua      (the server runs this one. The CLIENT file is cl_init.lua next to it: never put this file there)
---           NEEDS the 15.4 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua: it refuses to load without them. 15.6 ALSO NEEDS the HeatOutputInterval knob of the 15.5 config
+--           NEEDS the 15.4 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua: it refuses to load without them
 --
--- 15.6 (search for [CHANGED 3]): THE HEAT READOUT HAS ITS OWN CLOCK, like the lazer's since 15.5. The wire outputs HeatKJ / HeatF / HeatPct used to be written at the end of every sweep (RadSweepInterval,
---   0.25 s). Now ONE more timer (every HeatOutputInterval, 0.1 s) writes them for every radiator that holds heat, and once more when it has cooled to room temperature (so the readout ends at 0);
---   a radiator at room temperature that already shows 0 costs one table lookup per interval. UpdateWireOutputs no longer writes them (one owner: HeatReadout). The hover text is unchanged.
 -- 15.4 (search for [CHANGED 2]): NO MORE OVERCLOCK. The radiator takes out RadSapSmall .. RadSapBig kJ per second (times the strength its tank gives it) and never hurts itself from heat any
 --   more; the Overclock wire input, the damage and the "over its limit" state are gone. The steam sounds FADE OUT when the flush ends (RadFlushFadeSeconds).
 -- 15.3 ADDS THE COOLANT (search for [CHANGED 1]): a tank (1/8 of the bounding box, 108 litres at the default size), a Flush wire input that vents it as a coloured cloud of steam with a
@@ -55,13 +52,7 @@ end
 
 local Heat = ACFLazers.Heat
 
--- [CHANGED 3] (15.6) The knob of the heat-readout timer. Without it the timer below could not be made; say so once, clearly.
-if not tonumber(CFG.HeatOutputInterval) then
-    ErrorNoHalt("[acf_radiator] the config has no HeatOutputInterval (15.5): paste the two lines of config_lines_15_5.txt into lua/autorun/acf_lazers_config.lua (next to HeatMaxDeltaTime), or copy the 15.5 config, then restart.\n")
-    return
-end
-
-local VERSION = "15.6"
+local VERSION = "15.4"
 MsgN("[acf_radiator] init.lua version " .. VERSION .. " loaded")
 
 -- How many radiators one player may own (GMod reads a server variable called sbox_max<name>; CreateConVar does nothing if it already exists).
@@ -270,16 +261,6 @@ end
 
 timer.Create("ACFLazers_RadiatorSweep", math.max(CFG.RadSweepInterval, 0.05), 0, function() Rad.Sweep() end)
 
--- [CHANGED 3] (15.6) The heat READOUT of every radiator (the three heat wire outputs), on its own clock: one timer for all of them, like the sweep. The heat itself is exact whenever it is read
--- (the heat store settles lazily), so this only decides how often the outputs are refreshed. HeatOutputInterval is the lazer's knob too; at least 0.02 s so a 0 cannot flood the server.
-function Rad.Readout()
-    for radiator in pairs(Rad.List) do
-        if IsValid(radiator) then radiator:HeatReadout() end
-    end
-end
-
-timer.Create("ACFLazers_RadiatorReadout", math.max(tonumber(CFG.HeatOutputInterval) or 0.1, 0.02), 0, function() Rad.Readout() end)
-
 -- ===================== CFW EVENTS =====================
 -- [GUESS] the arguments: entityAdded / entityRemoved (contraption, entity), created / removed (contraption), merged (contraption, the one it was merged into), split (previous, new)
 -- [SEEN in track_cost_sv.lua, entity_tracking_sv.lua, kill_tracking_sv.lua, acf_rack/init.lua:446-453]. Only the contraption is used: radiators in it rebuild their member list at the
@@ -331,7 +312,6 @@ function ENT:Initialize()
     self.Status         = "Not set up yet"
     self.StatusKind     = "new"
     self.OverlaySig     = ""
-    self.HeatShown      = true    -- [CHANGED 3] true until the readout has written the COLD state (the first refresh writes 0 kJ / 59 F / 0% for a radiator that was never hot)
 
     -- [CHANGED 1] the coolant tank. ApplyData sizes it (Capacity, litres) and fills it (Amount, litres). The names Amount / Capacity / GetUnitMass / Consume are the ones ACF's SUPPLY CRATE
     -- looks for in its list of fuel tanks (ACF.FuelTanks, entities/acf_supply/modules/supply.lua): being in that list is all it takes to be topped up by a supply crate.
@@ -639,31 +619,12 @@ function ENT:UpdateWireOutputs()
     WireLib.TriggerOutput(self, "HotParts", self.HotParts)
     WireLib.TriggerOutput(self, "Pool", self.PoolSize)
     WireLib.TriggerOutput(self, "Radius", ACFLazers.GetRadRadius(self:GetWidth()))
-    -- [CHANGED 3] (15.6) HeatKJ / HeatF / HeatPct are written by HeatReadout, on their own clock (they used to be written here, with every sweep)
-    WireLib.TriggerOutput(self, "Coolant", self.Amount)
-    WireLib.TriggerOutput(self, "CoolantPct", self:GetFill() * 100)
-    WireLib.TriggerOutput(self, "Flushing", self.Venting and 1 or 0)
-end
-
--- [CHANGED 3] (15.6) The three heat wire outputs: kJ above room temperature, degrees Fahrenheit, percent of the HOT temperature.
-function ENT:UpdateHeatOutputs()
-    if not WireLib then return end
-
     WireLib.TriggerOutput(self, "HeatKJ", Heat.GetKJ(self))
     WireLib.TriggerOutput(self, "HeatF", Heat.GetTempF(self))
     WireLib.TriggerOutput(self, "HeatPct", self:GetHeatPct() * 100)
-end
-
--- [CHANGED 3] (15.6) One refresh of the heat readout (Rad.Readout calls it every HeatOutputInterval): while the radiator holds heat, and once more after it has cooled to room temperature so
--- the readout ends at 0. A radiator at room temperature that already shows 0 costs one table lookup.
-function ENT:HeatReadout()
-    local hot = Heat.GetKJ(self) > 0
-
-    if not (hot or self.HeatShown) then return end
-
-    self.HeatShown = hot
-
-    self:UpdateHeatOutputs()
+    WireLib.TriggerOutput(self, "Coolant", self.Amount)
+    WireLib.TriggerOutput(self, "CoolantPct", self:GetFill() * 100)
+    WireLib.TriggerOutput(self, "Flushing", self.Venting and 1 or 0)
 end
 
 -- The hover text (ACF's overlay system calls this; ENT:UpdateOverlay() asks it to refresh).
