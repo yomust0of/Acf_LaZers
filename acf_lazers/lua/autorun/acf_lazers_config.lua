@@ -375,10 +375,10 @@ table.Merge(ACFLazers.Config, {
     HeatForgetBelowK    = 0.5,    -- kelvin above room temperature. A cooling entity this close to room temperature is forgotten (it costs nothing again)
     HeatSweepInterval   = 5,      -- seconds between the sweeps that forget cooled-down entities and entities that were removed
     HeatCheckInterval   = 0.1,    -- seconds between a lazer's heat checks (the damage a lazer over its limit does to itself). A beam hit / a shot is counted at once, only the checks wait
-    HeatMaxDeltaTime    = 0.5,    -- seconds. The longest "time since the last check" a heat check will act for (a lag spike cannot turn into one huge burst of heat damage)
+    HeatMaxDeltaTime    = 0.25,    -- seconds. The longest "time since the last check" a heat check will act for (a lag spike cannot turn into one huge burst of heat damage)
 
     -- WHERE THE HEAT COMES FROM. Small .. Big = a straight line over the size of the thing (see the top of this block).
-    HeatLazerSmall      = 15,      -- a firing lazer adds this many kJ of heat per kJ it spends (the draw). 1 = all of it, 5 = five times as much [CHANGED 3] (15.1: was 1; the beam's heat on props is built from this same rate, so it follows)
+    HeatLazerSmall      = 10,      -- a firing lazer adds this many kJ of heat per kJ it spends (the draw). 1 = all of it, 5 = five times as much [CHANGED 3] (15.1: was 1; the beam's heat on props is built from this same rate, so it follows)
     HeatLazerBig        = 30,
     HeatHitSmall        = 1,      -- a beam adds (the lazer's heat rate) x this x the same focus / angle / burn-through weakening as its damage to the prop it hits
     HeatHitBig          = 1,
