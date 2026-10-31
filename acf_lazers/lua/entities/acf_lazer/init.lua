@@ -24,6 +24,9 @@
 --      leaves an EMPTY SHELL of a class behind (no hover text, no wire outputs, stock size). Now a missing knob means 0.1 s / 0.25 s, and nothing about the readout can stop this file.
 --   11 (15.7) THE PLAYER LIMIT: the server variable sbox_maxacf_lazers is created HERE, from LazerMaxPerPlayer (config; 40, also when the config has none), like the capacitor, generator and radiator
 --      do. A separate file of yours used to create it (lua/autorun/server/acf_lazers_limits.lua, at 20): copy the 15.7 version of that file over it, or it creates the variable first and its 20 stays.
+--   12 (16.1) AUTOMATIC FOCUS + SHARED SAFEZONE RULES. While it fires, the lazer moves its own focal length toward the distance of the first thing its beam hits (ENT:AutoFocus, called at the end of
+--      FireLaserBeam), at LazerFocusSpeed units per second, always inside the focal limits of its size (ACFLazers.StepFocus). The tool's slider (and a dupe's value) is where it starts. And the
+--      safezone helpers that used to be written out near the top of this file are the config's now (ACFLazers.IsEntityInSafezone / SafezoneFlags): the PPC uses the same ones. NEEDS the 16.1 config
 -- =========================================================================
 
 AddCSLuaFile("cl_init.lua")
@@ -57,6 +60,12 @@ if not (ACFLazers.Heat and ACFLazers.Heat.Add and ACFLazers.GetHeatCapacity) the
     return
 end
 
+-- [CHANGED 12] (16.1) The safezone rules and the auto-focus maths are in the config of this batch. Without them every beam tick would throw; say so once, clearly.
+if not (ACFLazers.IsEntityInSafezone and ACFLazers.SafezoneFlags and ACFLazers.StepFocus and ACFLazers.AutoFocusOn) then
+    ErrorNoHalt("[acf_lazer] the safezone / auto-focus helpers are missing: lua/autorun/acf_lazers_config.lua is older than this init.lua (16.1). Copy the new config as well, then restart.\n")
+    return
+end
+
 local Heat = ACFLazers.Heat
 
 -- [CHANGED 10] (15.7) The two knobs of the heat readout are OPTIONAL: a config without them (a 15.4 one) gets these. (15.5 / 15.6 returned from this file when they were missing, and a file that
@@ -67,7 +76,7 @@ local OVERLAY_DELAY_DEFAULT    = 0.25 -- seconds, the hover-text buffer of this 
 ENT.OverlayDelay = math.max(tonumber(LASER_CONFIG.LazerOverlayDelay) or OVERLAY_DELAY_DEFAULT, 0) -- [CHANGED 8] ACF's hover-text buffer for this entity (ACF's own default is 1 s)
 
 -- Which version of this file is running. It is printed to the server console when the file loads, and every notice below carries it.
-local VERSION = "15.7" -- [CHANGED 1]
+local VERSION = "16.1" -- [CHANGED 1] [CHANGED 12]
 MsgN("[acf_lazer] init.lua version " .. VERSION .. " loaded")
 
 -- [CHANGED 11] (15.7) How many lazers one player may own: GMod reads a server variable called sbox_max<name> (the spawn function below asks ply:CheckLimit("acf_lazers")), and CreateConVar does
@@ -103,45 +112,10 @@ concommand.Add("acf_lazer_debug", function(ply, _, args)
     end
 end, nil, "1 = lazers tell their owner in the console what they do to props, 0 = off (admins only)")
 
--- Returns true if an entity is protected by a server safezone. THE BUG THIS FIXES: the old check treated "the name InSafeZone / InSafezone exists on the
--- entity" as "yes, it is in a safezone". If an addon defines that name as a METHOD (ent:InSafeZone()), every entity has it and every prop counted as being in a
--- safezone. Now a flag that is a method is CALLED and its answer is used; a plain field is read as it is.
-local SAFEZONE_FLAGS = { "InSafeZone", "InSafezone", "IsSafe", "GetInSafezone" } -- the names common safezone addons use
-
-local function ReadSafezoneFlag(ent, name)
-    local v = ent[name]
-
-    if isfunction(v) then
-        local ok, res = pcall(v, ent)
-
-        return (ok and res) and true or false, "method"
-    end
-
-    return v and true or false, "field"
-end
-
-local function IsEntityInSafezone(ent)
-    if not IsValid(ent) then return false end
-
-    for _, name in ipairs(SAFEZONE_FLAGS) do
-        if ReadSafezoneFlag(ent, name) then return true end
-    end
-
-    return false
-end
-
--- For the notices: WHICH of the flags above said "safe", and whether it is a plain field or a method that answered yes (so you know which addon it is).
-local function SafezoneFlags(ent)
-    local found = {}
-
-    for _, name in ipairs(SAFEZONE_FLAGS) do
-        local yes, kind = ReadSafezoneFlag(ent, name)
-
-        if yes then found[#found + 1] = name .. " (" .. kind .. " says yes)" end
-    end
-
-    return #found > 0 and table.concat(found, ", ") or "none?"
-end
+-- [CHANGED 12] (16.1) The safezone rules (which flag names count, and THE BUG THE OLD LOCAL CODE FIXED: a flag that an addon defines as a METHOD is CALLED and its answer used, not taken as "yes" because the
+-- name exists) moved to the config as ACFLazers.IsEntityInSafezone / SafezoneFlags, because the PPC needs the very same rules. Same names here, so every use below reads as before.
+local IsEntityInSafezone = ACFLazers.IsEntityInSafezone
+local SafezoneFlags      = ACFLazers.SafezoneFlags
 
 -- A short name for a prop in a message: its class and the file name of its model.
 local function Describe(ent)
@@ -1222,6 +1196,23 @@ function ENT:ProcessLaserImpact(tr, dir, dt, doEffects, beam)
     return self:DamageProp(target, tr, dir, dt, focal, doEffects, beam)
 end
 
+-- [CHANGED 12] (16.1) AUTOMATIC FOCUS. Moves the focal length toward `target` (the distance of the first thing the beam hit this tick; nil = nothing hit = stay) by at most LazerFocusSpeed x dt,
+-- always inside the focal limits of this size (ACFLazers.StepFocus does the moving and the clamping). self.Focal is the plain field the damage curve reads and the duplicator saves; the NetworkVar
+-- FocalLength is what the clients and the tool see; the wire output follows. Off (LazerAutoFocus = false) or a speed of 0: nothing moves.
+function ENT:AutoFocus(dt, target)
+    if not target or not ACFLazers.AutoFocusOn() then return end
+
+    local old = self.Focal or LASER_CONFIG.FocalDefault
+    local new = ACFLazers.StepFocus(old, target, dt, self:GetCaliber())
+
+    if new == old then return end
+
+    self.Focal = new
+    self:SetFocalLength(new)
+
+    if WireLib then WireLib.TriggerOutput(self, "FocalLength", new) end
+end
+
 -- Server-side trace loop. dt = seconds since the last beam tick (see Think).
 -- It now also works out WHERE THE BEAM ENDED and publishes that (BeamLength / BeamHit, shared.lua), so every
 -- client draws the same beam and the end-of-beam sounds know where to stand. Clients no longer trace anything themselves.
@@ -1246,6 +1237,7 @@ function ENT:FireLaserBeam(dt)
     local endHit  = false -- true = it ended on a surface
     local endMat  = 0     -- material of that surface (MAT_* number)
     local ranOut  = true  -- only stays true if the loop used up all MaxBeamHits (a pathological beam)
+    local focusDist = nil -- [CHANGED 12] distance from the muzzle to the FIRST thing the beam hit this tick (nil = it hit nothing): what the automatic focus aims for
 
     -- The beam's own state, shared by everything it hits this tick:
     --   scale      = its strength: 1 = full. After it burns through a plate this becomes a slice of PenDamageFraction (see DamageProp).
@@ -1272,6 +1264,8 @@ function ENT:FireLaserBeam(dt)
             ranOut = false
             break
         end
+
+        if not focusDist then focusDist = startPos:Distance(tr.HitPos) end -- [CHANGED 12] only the first hit counts (a beam that burns through a plate keeps focusing on that plate)
 
         local target = tr.Entity
 
@@ -1307,6 +1301,8 @@ function ENT:FireLaserBeam(dt)
     self:SetBeamLength(startPos:Distance(endPos))
     self:SetBeamHit(endHit)
     self:UpdateBeamSounds(endHit, endPos, endMat)
+
+    self:AutoFocus(dt, focusDist) -- [CHANGED 12] after this tick's damage, so the damage of a tick uses the focal length the tick STARTED with
 
     -- Wire readout of the focal damage multiplier where the beam ended. Only sent when it changed by a visible amount.
     if WireLib then

@@ -12,6 +12,8 @@
 -- 15.2 (search for [CHANGED 1]): the radiator tool asks this file for the temperature of the plain part you look at (two network messages, answered one entity at a time).
 -- 15.3 (search for [CHANGED 2]): hot lazers set players on fire (one timer, the box test is in the config), and the info command no longer talks about a lock-out (there is none).
 -- 15.4 (search for [CHANGED 3]): radiators cool themselves HeatCoolMultRad times as fast as a prop, and a player sitting in a vehicle is not set on fire (HeatIgniteSeated).
+-- 16.6 (search for [CHANGED 4]): THE HEAT CHECKER. Heat.Describe (everything about one part's heat), Heat.Scan / ScanLines / ScanPrint (where the heat is around a point), the messages ACFLazers_HeatCheckQuery /
+--       Reply the Heat Checker tool uses, and the console command acf_lazers_heat_scan. Reads only: nothing here changes any heat.
 -- =========================================================================
 
 if not SERVER then return end
@@ -438,3 +440,189 @@ concommand.Add("acf_lazers_heat_set", function(ply, _, args)
     Heat.SetF(ent, degF)
     Say(ply, string.format("[heat] %s #%d is now %.0f F", ent:GetClass(), ent:EntIndex(), Heat.GetTempF(ent)))
 end, nil, "Admins: sets the temperature (Fahrenheit) of the entity you are looking at. A test aid")
+
+
+-- ===================== THE HEAT CHECKER ===================== [CHANGED 4]
+-- Everything below only READS the heat. The Heat Checker tool (lua/weapons/gmod_tool/stools/acf_heat_tool.lua) shows Heat.Describe of the part you look at and runs Heat.ScanPrint on left-click.
+
+local function Commas(n)
+    local digits = string.format("%d", math.floor((tonumber(n) or 0) + 0.5))
+    local sign   = ""
+
+    if string.sub(digits, 1, 1) == "-" then sign, digits = "-", string.sub(digits, 2) end
+
+    local out = ""
+
+    while #digits > 3 do
+        out    = "," .. string.sub(digits, -3) .. out
+        digits = string.sub(digits, 1, -4)
+    end
+
+    return sign .. digits .. out
+end
+
+Heat.Commas = Commas
+
+--- Everything about one part's heat, as numbers: { class, mass, capacity (kJ per kelvin), kJ, riseK, degF, pctHot (a fraction), ownPct (a fraction of the part's OWN limit: lazer, PPC or capacitor; -1 for
+--- other parts), natural (kJ it loses by itself in the next second), radKJps (kJ per second the radiators took out of it in their last sweep), poolKJps (what the whole pool they belong to took),
+--- machine (does a scan count it as a machine) }. A part with no heat gives zeros.
+function Heat.Describe(ent)
+    local now      = CurTime()
+    local class    = ent.GetClass and ent:GetClass() or ""
+    local capacity = Heat.GetCapacity(ent)
+    local kJ       = Heat.GetKJ(ent)
+    local riseK    = kJ > 0 and kJ / capacity or 0
+    local d        = {
+        class = class, mass = Heat.GetMass(ent), capacity = capacity, kJ = kJ, riseK = riseK, degF = Heat.GetTempF(ent), pctHot = riseK / math.max(ACFLazers.GetHeatRiseHot(), 1e-6),
+        ownPct = -1, natural = 0, radKJps = 0, poolKJps = 0, machine = ACFLazers.IsHeatMachine(class),
+    }
+
+    if riseK > 0 then d.natural = (riseK - ACFLazers.HeatCool(riseK, 1, Heat.GetCoolMult(ent))) * capacity end
+
+    if class == "acf_lazer" then
+        d.ownPct = riseK / math.max(ACFLazers.GetHeatRiseLazer(), 1e-6)
+    elseif class == "acf_ppc" and ACFLazers.GetPPCHeatRise then
+        d.ownPct = riseK / math.max(ACFLazers.GetPPCHeatRise(), 1e-6)
+    elseif class == "acf_capacitor" then
+        d.ownPct = riseK / math.max(ACFLazers.GetHeatRiseCap(), 1e-6)
+    end
+
+    -- what the radiators took out of it in their last sweep (acf_radiator/init.lua writes ACFL_RadOut / ACFL_RadPool / ACFL_RadOutT); an old note means no radiator reaches it any more
+    local window = math.max(tonumber(CFG.RadSweepInterval) or 0.25, 0.05) * 4 + 1
+
+    if ent.ACFL_RadOutT and now - ent.ACFL_RadOutT <= window then
+        d.radKJps  = tonumber(ent.ACFL_RadOut) or 0
+        d.poolKJps = tonumber(ent.ACFL_RadPool) or 0
+    end
+
+    return d
+end
+
+--- Every part with heat within `radius` units of `center`, summed up: returns the summary (ACFLazers.HeatScanSummary), the rows it was made from, and the radius used.
+function Heat.Scan(center, radius)
+    radius = ACFLazers.ClampHeatCheckRadius(radius)
+
+    local reach2 = radius * radius
+    local rows   = {}
+
+    for ent in pairs(Heat.Registry) do
+        if IsValid(ent) and ent:GetPos():DistToSqr(center) <= reach2 then
+            local d = Heat.Describe(ent)
+
+            if d.kJ > 0 then
+                d.ent = ent
+                rows[#rows + 1] = d
+            end
+        end
+    end
+
+    table.sort(rows, function(a, b) return a.ent:EntIndex() < b.ent:EntIndex() end) -- (a fixed order, so equal parts always list the same way)
+
+    return ACFLazers.HeatScanSummary(rows, CFG.RadWeightPower, ACFLazers.HeatCheckNumber("HeatCheckListMax")), rows, radius
+end
+
+--- The text of a scan: a list of lines, the first one a short summary (the one that goes to chat).
+function Heat.ScanLines(S, radius)
+    local lines = {}
+    local power = S.power
+
+    if S.count == 0 then
+        lines[1] = string.format("[heat scan] nothing within %d units holds any heat.", radius)
+
+        return lines
+    end
+
+    lines[1] = string.format("[heat scan] %d parts within %d units hold heat, %s kJ in all. Machines (lazers, PPCs, capacitors): %d, %s kJ (%.1f%% of the heat); a radiator shares its work by temperature ^ %g, so they would get %.2f%% of it.",
+        S.count, radius, Commas(S.totalKJ), S.machines.count, Commas(S.machines.kJ), S.kJShare * 100, power, S.weightShare * 100)
+    lines[2] = string.format("  machines: %d parts, %s kJ, hottest %s K above room", S.machines.count, Commas(S.machines.kJ), Commas(S.machines.hottestK))
+    lines[3] = string.format("  everything else: %d parts, %s kJ, hottest %s K above room", S.plain.count, Commas(S.plain.kJ), Commas(S.plain.hottestK))
+    lines[4] = string.format("  the %d hottest:", #S.top)
+
+    for i, row in ipairs(S.top) do
+        local own = row.ownPct and row.ownPct >= 0 and string.format(", %d%% of its own limit", math.floor(row.ownPct * 100 + 0.5)) or ""
+        local rad = row.radKJps > 0 and string.format(", radiators take %s kJ/s", Commas(row.radKJps)) or ""
+
+        lines[#lines + 1] = string.format("   %2d. %s #%d  %s kg  %s K above room (%s F)  %s kJ%s%s", i, row.class, row.ent and row.ent:EntIndex() or 0, Commas(row.mass), Commas(row.riseK), Commas(row.degF), Commas(row.kJ), own, rad)
+    end
+
+    return lines
+end
+
+--- Scans around `center` and tells the player: the summary line in chat, every line in the console. Returns the summary.
+function Heat.ScanPrint(ply, center, radius)
+    local S, _, used = Heat.Scan(center, radius)
+    local lines      = Heat.ScanLines(S, used)
+
+    if IsValid(ply) then ply:ChatPrint(lines[1]) end
+
+    for _, line in ipairs(lines) do Say(ply, line) end
+
+    return S
+end
+
+-- The question and the answer of the tool's readout (a richer cousin of ACFLazers_HeatQuery, which the radiator tool keeps using).
+util.AddNetworkString("ACFLazers_HeatCheckQuery")
+util.AddNetworkString("ACFLazers_HeatCheckReply")
+
+net.Receive("ACFLazers_HeatCheckQuery", function(_, ply)
+    if not IsValid(ply) then return end
+
+    local now = CurTime()
+
+    if now < (ply.ACFL_NextCheckQuery or 0) then return end
+
+    ply.ACFL_NextCheckQuery = now + math.max(ACFLazers.HeatCheckNumber("HeatCheckQueryInterval"), 0.05) * 0.5
+
+    local ent = net.ReadEntity()
+
+    if not IsValid(ent) or ent:IsWorld() or ent:IsPlayer() then return end
+
+    local eye   = ply:EyePos()
+    local reach = ACFLazers.HeatCheckNumber("HeatCheckDistance") + 64 -- slack: the client measures to where its trace hit, the server to the nearest point of the entity
+
+    if ent:NearestPoint(eye):DistToSqr(eye) > reach * reach then return end
+
+    local d = Heat.Describe(ent)
+
+    net.Start("ACFLazers_HeatCheckReply")
+    net.WriteEntity(ent)
+    net.WriteString(d.class)
+    net.WriteFloat(d.mass)
+    net.WriteFloat(d.capacity)
+    net.WriteFloat(d.kJ)
+    net.WriteFloat(d.degF)
+    net.WriteFloat(d.pctHot)
+    net.WriteFloat(d.ownPct)
+    net.WriteFloat(d.natural)
+    net.WriteFloat(d.radKJps)
+    net.WriteFloat(d.poolKJps)
+    net.Send(ply)
+end)
+
+-- The spot a player aims at: where a plain trace along the aim ends (HeatCheckDistance units at most), whatever it hits.
+local function AimPoint(ply)
+    if not IsValid(ply) then return nil end
+
+    local from = ply:EyePos()
+    local tr   = util.TraceLine({ start = from, endpos = from + ply:GetAimVector() * ACFLazers.HeatCheckNumber("HeatCheckDistance"), filter = ply })
+
+    return tr and tr.HitPos or from
+end
+
+concommand.Add("acf_lazers_heat_scan", function(ply, _, args)
+    if IsValid(ply) then
+        if CurTime() < (ply.ACFL_NextScan or 0) then return end
+
+        ply.ACFL_NextScan = CurTime() + 1
+    end
+
+    local center = AimPoint(ply)
+
+    if not center then
+        Say(ply, "[heat scan] this needs a player (it scans the spot you aim at).")
+
+        return
+    end
+
+    Heat.ScanPrint(ply, center, tonumber(args[1]))
+end, nil, "Lists where the heat is around the spot you are aiming at (optional: the radius in units). The list is in your console")

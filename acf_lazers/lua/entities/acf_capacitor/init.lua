@@ -11,6 +11,7 @@
 --   4  OVER ITS CRITICAL HEAT it damages itself: HeatThink in Think, damage per second = HeatCapDamage percent of max health x (how far over)^2, through ACF's damage pipeline. A kill
 --      detonates it like any destroyed capacitor; a damaged one also rolls its usual explosion dice
 --   5  New wire outputs HeatKJ, HeatF, HeatPct (percent of the CRITICAL heat), the temperature line on the hover text, and the hover text refreshes as the heat moves
+--   6  (16.1) The hover text says "lazer_ents" where it said "lazer" (a lazer OR a PPC draws from a capacitor, and both are counted there). Nothing else changed
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 -- =========================================================================
 
@@ -53,7 +54,7 @@ end
 
 local Heat = ACFLazers.Heat
 
-local VERSION = "15" -- [CHANGED 1]
+local VERSION = "16.1" -- [CHANGED 1] [CHANGED 6]
 MsgN("[acf_capacitor] init.lua version " .. VERSION .. " loaded")
 
 -- How many capacitors one player may own. GMod's own limit system reads a server variable called sbox_max<name>; CreateConVar does nothing if it already exists.
@@ -350,7 +351,7 @@ function ENT:ACF_UpdateOverlayState(State)
     if self.Dumping then
         State:AddWarning(string.format("Dumping charge (up to %.0f kJ/s)", self.DumpRate))
     elseif self.Drained then
-        State:AddWarning("Powering a lazer (charging is paused)")
+        State:AddWarning("Powering lazer_ents (charging is paused)") -- [CHANGED 6]
     elseif not self.Allowing then
         State:AddWarning("Charging is switched off (AllowCharge input)")
     elseif self.Charge >= self.Capacity - 1e-6 then
@@ -379,7 +380,7 @@ function ENT:ACF_UpdateOverlayState(State)
     for _ in pairs(self.Lazers) do linkedLazers = linkedLazers + 1 end
     for _ in pairs(self.Generators) do linkedGens = linkedGens + 1 end
 
-    State:AddKeyValue("Linked", string.format("%d capacitor(s), %d lazer(s), %d generator(s)", linkedCaps, linkedLazers, linkedGens))
+    State:AddKeyValue("Linked", string.format("%d capacitor(s), %d lazer_ents, %d generator(s)", linkedCaps, linkedLazers, linkedGens)) -- [CHANGED 6]
 
     if linkedCaps > 0 then
         local groupCharge, groupCapacity = 0, 0

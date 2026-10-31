@@ -36,8 +36,8 @@
 --   18 (15.6) THE RADIATOR'S HEAT READOUT HAS THE SAME CLOCK: HeatOutputInterval is also how often a radiator that holds heat refreshes its HeatKJ / HeatF / HeatPct outputs (they used to be written
 --      with every sweep, RadSweepInterval 0.25 s). No new knob.
 --   19 (15.7) THE TWO READOUT KNOBS (HeatOutputInterval, LazerOverlayDelay) ARE OPTIONAL: a config without them no longer stops the lazer or the radiator from loading; they use 0.1 s / 0.25 s.
---      (15.6 refused to load without them.) PLAYER LIMITS: every entity has its knob (LazerMaxPerPlayer is new) and all four are 40. Each is only the DEFAULT of a server variable
---      (sbox_maxacf_lazers / _capacitors / _generators / _radiators) that can be changed in the console.
+--      (15.6 refused to load without them.) PLAYER LIMITS: every entity has its knob (LazerMaxPerPlayer is new) and all four are 40 (16 adds the PPC's PPCMaxPerPlayer, 40 too). Each is only the DEFAULT of a server variable
+--      (sbox_maxacf_lazers / _capacitors / _generators / _radiators / _ppcs) that can be changed in the console.
 --   20 (15.8) THE SECOND RADIATOR MODEL, THE ROUNDSINK: new block of knobs RadRound... (the cylinder model models/lasers/roundsink.mdl: radius 13 and height 46 at scale 1, the tool slider is its
 --      RADIUS, 12 to 60) and RadBeyondMax. A radiator is now a "heatsink" (the box, as before) or a "roundsink"; the tool has a model selector. Every radiator size helper (ClampRadWidth,
 --      GetRadSizeFraction, GetRadScale, GetRadMass, GetRadRadius, GetRadSap, GetRadWaste, GetRadCoolantCapacity, GetRadFlushPitch, GetRadReadout) takes the kind as its LAST argument; left out
@@ -47,6 +47,28 @@
 --      That rule: a roundsink with MORE volume than the biggest heatsink (radius 24 and a little more, up to 1.95 times at radius 30) has the biggest heatsink's mass and sap rate multiplied by how many
 --      times its volume it has, and its reach goes on along the same line (a heatsink never needs it). A config that still has the line RadBeyondMax works: it is ignored. The tool screen, the menu
 --      text and the hover text of a roundsink also say the DIAMETER. Your dimensions (RadRoundRadius 13, RadRoundHeight 46) are used as they are.
+--   22 (16) THE PPC, a new weapon (entity acf_ppc): a block of knobs "PPC..." (after the roundsink knobs) and a section "PPC HELPERS" (before the radiator helpers). Size 20 to 300 mm, ONE projectile per
+--      shot, the energy of a shot (the lazer's draw doubled, one second of it), speed 600 to 800 m/s, a 7 second life with a 20% damage falloff over it, and an HE blast with two scalars (how much HE a shot's kJ
+--      make, how much damage props take from it). LinkClasses has acf_ppc, so every tool can select and link PPCs. Nothing else in the config changed.
+--   23 (16.1) (a) THE PPC KNOBS AND HELPERS WERE REPLACED (the same block, the same place): the ball is the model PPCBallModel (sphere_3) with a size in WORLD UNITS (PPCBallDiameter, PPCBallModelDiameter;
+--      PPCBallScale is gone), and the heat of a blast (PPCHeatScalar, PPCHeatRadiusMult, GetPPCHeat, GetPPCHeatRadius). (b) AUTOMATIC FOCUS: the knobs LazerAutoFocus and LazerFocusSpeed (after FocalBoostMax)
+--      and the helpers AutoFocusOn, GetFocusSpeed, StepFocus. (c) THE SAFEZONE RULES MOVED HERE from the lazer's init.lua (SafezoneFlagNames, ReadSafezoneFlag, IsEntityInSafezone, SafezoneFlags, DescribeSafezone,
+--      IsInACFSafezone, IsProtectedBySafezone), because the PPC needs the same rules. Lazer and PPC files check for the new helpers when they load and say so if the config is older. Every new knob is optional.
+--   24 (16.2) (a) A PPC SHOT COSTS 2.5 TIMES AS MUCH ENERGY: PPCEnergySmall 200 -> 500, PPCEnergyBig 80000 -> 200000 (a 100 mm shot 6581 -> 16452 kJ). The blast follows the energy, so it is 2.5 times the HE too.
+--      (b) THE PPC HEATS ITSELF AND HURTS ITSELF, like a lazer: new knobs PPCHeatSmall, PPCHeatBig, PPCHeatCapF, PPCHeatDamage, PPCHeatExplodeChance, PPCHeatExplosionMult (1/3 of a lazer's death explosion),
+--      PPCHeatDeathDebrisPower, PPCHeatFiringSeconds; new helpers GetPPCHeatRise, GetPPCHeatScalar, GetPPCShotHeat, GetPPCDeathFiller; GetPPCReadout has three more fields (heat, heatPct, deathFiller).
+--      HeatIgniteClasses now holds acf_ppc as well as acf_lazer. (c) THE PPC FIRE SOUND: knobs PPCFireSound, PPCFireSound2, PPCFireSoundLevel, PPCFireVolume, PPCFireVolume2, PPCFirePitchSmall,
+--      PPCFirePitchBig; helpers PPCSoundList, PickPPCSound, GetPPCFirePitch. Every new knob is optional (the in-code defaults sit in the PPC helpers). The PPC file checks for the new helpers when it loads.
+--   25 (16.3) THE PPC HEATS ITSELF MORE: PPCHeatSmall and PPCHeatBig 5.616 -> 8.465, so a 100 mm shot takes 77% of the PPC's limit (16.2: 51%). Only these two numbers (and the table next to them) changed.
+--   26 (16.4) EVERY PPC TAKES 77% OF ITS OWN LIMIT PER SHOT: PPCHeatSmall / PPCHeatBig (kJ of heat per kJ of the shot, 16.2 and 16.3) are REPLACED by PPCHeatPctSmall / PPCHeatPctBig (percent of the PPC's own
+--      limit one shot adds, 77 at both ends); helper GetPPCHeatScalar replaced by GetPPCHeatPct, new GetPPCLimitKJ, GetPPCShotHeat = that percent x the limit. The energy knobs no longer touch the PPC's heat.
+--   27 (16.5) THE PPC'S HEAT PER SHOT IS A STRAIGHT LINE OVER THE CALIBER: PPCHeatPctSmall 77 -> 67.8 and PPCHeatPctBig 77 -> 100 (100 mm = 77%, 300 mm = 100%, 20 mm = 67.8%; 16.4 had 77% at every size).
+--      Only these two numbers (and the table next to them) changed.
+--   28 (16.6) THREE THINGS. (a) THE PPC'S BLAST HEATS ONLY WHAT IT DAMAGES, IN PROPORTION TO THE DAMAGE: the 16.1 pass (every ACF thing inside a sphere, falling off with distance) is gone, and with it the knobs
+--      PPCHeatScalar and PPCHeatRadiusMult and the helpers GetPPCHeat and GetPPCHeatRadius. New: PPCHeatPerDamage (kJ of heat per point of ACF damage), PPCHeatMaxPct (a cap per part), helper GetPPCDamageHeat.
+--      Parts the explosion never hurts (behind armour, out of its line of sight, the shooter's contraption, safezones) get no heat. (b) THE SMALLEST PPC IS 50 MM: PPCCaliberMin 20 -> 50 and the new knob
+--      PPCCurveStart (20) keeps the size curves where they were, so every number at 50 mm and above is exactly what it was. (c) THE HEAT CHECKER: new knobs HeatCheckDistance, HeatCheckQueryInterval,
+--      HeatCheckRadius, HeatCheckRadiusMax, HeatCheckListMax, HeatCheckMachineClasses and helpers HeatCheckNumber, ClampHeatCheckRadius, IsHeatMachine, HeatScanSummary (all optional: the file has defaults).
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -54,7 +76,7 @@
 -- YOUR OWN VALUES: this copy carries them, so it can replace your file as it is. Every such line is marked [YOUR VALUE, shipped N]:
 --   HeatCoolHotBoost 1.3 (shipped 1)   HeatLazerSmall 10 (shipped 5)   HeatLazerBig 30 (shipped 5)
 --   HeatLazerCapF 900 (shipped 1100)   HeatExplodeChance 0.8 (shipped 0.5)   HeatMaxDeltaTime 0.25 (shipped 0.5)
--- Everything else is the shipped 15.9 value (RadFlushKJPerLiter 125000 is the shipped one; the four player limits are 40; the roundsink knobs RadRound... are new in 15.8; in 15.9 the roundsink's slider is radius 12 to 30 = a diameter of 24 to 60, and RadBeyondMax is gone).
+-- Everything else is the shipped 16.6 value (RadFlushKJPerLiter 125000 is the shipped one; the five player limits are 40: capacitor, generator, radiator, lazer and PPC). 16.6 changed: the smallest PPC is 50 mm (PPCCaliberMin 50; the new PPCCurveStart 20 keeps every number at 50 mm and above where it was); the PPC blast now heats only the parts it DAMAGES, in proportion to the damage (the new PPCHeatPerDamage 1000000 and PPCHeatMaxPct 300 replace PPCHeatScalar and PPCHeatRadiusMult); the new HeatCheck... knobs belong to the Heat Checker tool (HeatCheckInterval, the lazers' own overheat check, is not one of them and is still 0.1). 16.5: PPCHeatPctSmall 67.8 and PPCHeatPctBig 100 (100 mm = 77%, 300 mm = 100% of the PPC's own limit per shot); 16.2: PPCEnergySmall 500 and PPCEnergyBig 200000, the PPCHeat... knobs (the PPC heats itself), the PPCFire... knobs (its fire sound) and HeatIgniteClasses holds acf_ppc).
 -- =========================================================================
 
 if SERVER then AddCSLuaFile() end
@@ -128,6 +150,13 @@ table.Merge(ACFLazers.Config, {
     FocalEdgeFraction     = 3 / 4, -- damage at the edge of the radius, as a fraction of the normal max
     FocalFarEndFraction   = 1 / 3, -- damage at the lazer's effective range, as a fraction of the normal max
     FocalBoostMax         = 1.4,   -- centre damage at the sharpest focus amount (1.4 = 1.4x the normal max)
+    -- AUTOMATIC FOCUS [CHANGED 23] (16.1). While a lazer fires, its focal length MOVES BY ITSELF toward the distance of the first thing its beam hits, like a slow camera autofocus. The tool's Focal Length slider
+    -- (and a dupe's saved value) is where the lazer STARTS; the number it has moved to is what a dupe saves from then on. The focal length is always held inside the same limits as the slider
+    -- (FocalMin up to FocalMaxFraction of the effective range for that size, see ACFLazers.GetFocalLimits), so a wall 50 units away focuses it to FocalMin and the sky leaves it where it is. The damage of a
+    -- tick is worked out with the focal length the lazer had at the START of that tick (the move for this tick's hit is made at the end of the tick, so the focus is one tick behind).
+    -- Both knobs are OPTIONAL: a config without them means ON and 1000.
+    LazerAutoFocus  = true, -- false (or 0) = the focal length never moves by itself (the 16 and older behaviour)
+    LazerFocusSpeed = 1000, -- units per second the focal length can move. 0 = frozen (same as off). A beam that hits nothing leaves it where it is.
 
     -- ===================== BEAM =====================
     -- DISTANCE FALLOFF. Every beam loses damage the farther it travels, in ONE straight line:
@@ -222,7 +251,7 @@ table.Merge(ACFLazers.Config, {
     DisintegrateCaliber = 100, -- [GUESS] starting value, tune by feel
     DisintegrateType  = 0,    -- how the body dissolves: 0 = energy ball, 1 = heavy electrical, 2 = light electrical, 3 = core effect [KNOW: Entity:Dissolve types]
 
-    -- SAFEZONES. Anyone inside a safezone (as your safezone addon reports it, see IsEntityInSafezone in init.lua) takes only this fraction of
+    -- SAFEZONES. Anyone inside a safezone (as your safezone addon reports it, see ACFLazers.IsEntityInSafezone further down in this file) takes only this fraction of
     -- the lazer damage and can't be set on fire. Props in a safezone are still fully protected (the beam stops on them).
     -- Whether this is applied at all is now a per-LAZER setting: the "Safezone protection" checkbox on the toolgun (saved on the lazer, dupes
     -- keep it, checked by default). The old server console variable acf_lazer_safezone_protect is gone.
@@ -260,7 +289,7 @@ table.Merge(ACFLazers.Config, {
     -- Above 1 (say 2) also means no override, because a pool can never be more than 100% full.
     LazerStartFullFraction = 0.9,
     LazerEnergyReadInterval = 0.25, -- seconds between refreshes of the lazer's "Energy" wire output while it is in use (it checks once a second when idle)
-    LazerMaxPerPlayer   = 40,       -- [CHANGED 19] (15.7) default for the server variable sbox_maxacf_lazers: how many lazers one player may have. All four entities have such a knob and all are 40.
+    LazerMaxPerPlayer   = 40,       -- [CHANGED 19] (15.7) default for the server variable sbox_maxacf_lazers: how many lazers one player may have. All five entities have such a knob (the PPC's is PPCMaxPerPlayer) and all are 40.
                                     --   It is only the DEFAULT: CreateConVar does nothing when the variable already exists (the wiki says it returns the existing one unchanged), so a value it already has wins over
                                     --   this number. Change it in the console:  sbox_maxacf_lazers 60  (a negative number = no limit, GMod's own convention [GUESS]). In single player GMod never checks limits (the wiki)
 
@@ -451,8 +480,19 @@ table.Merge(ACFLazers.Config, {
     HeatIgniteReach     = 0,      -- units. The lazer's box is grown by this much on every side before the touch test (0 = real contact only)
     HeatIgniteInterval  = 0.1,    -- seconds between the touch checks (one timer for every lazer and player)
     HeatIgniteLife      = 5,      -- seconds a fire we light is lit for in one go. We put it out ourselves at the linger time; this only matters if the check ever stopped running
-    HeatIgniteClasses   = { acf_lazer = true }, -- which entities ignite players. Add acf_capacitor = true, acf_radiator = true ... if you want those to burn people too
+    HeatIgniteClasses   = { acf_lazer = true, acf_ppc = true }, -- [CHANGED 24] (16.2: acf_ppc is new) which entities ignite players. Add acf_capacitor = true, acf_radiator = true ... if you want those to burn people too. Take acf_ppc out if a hot PPC should not
     HeatIgniteSeated    = false, -- [CHANGED 16] false = a player sitting in a vehicle is never set on fire by a lazer (they only burn outside the vehicle); true = they burn like everyone else
+
+    -- THE HEAT CHECKER TOOL. [CHANGED 28] (16.6) A tool (acf_heat_tool.lua, "Heat Checker") and a console command (acf_lazers_heat_scan) to SEE where the heat is. With the tool out, look at any part within
+    -- HeatCheckDistance units: its class, mass, temperature, the heat it holds, how much it loses by itself in the next second and how much the radiators take out of it. Left-click lists the heat around the spot
+    -- you aim at (to your console, a summary in chat): how many parts hold heat, the lazers / PPCs / capacitors (HeatCheckMachineClasses) against everything else, and the share of a radiator's work the
+    -- machines would get (a radiator shares by temperature ^ RadWeightPower). Every one of these is OPTIONAL: the file has the number written here.
+    HeatCheckDistance  = 4096,   -- units. How far away a part can be and still be read by the tool
+    HeatCheckQueryInterval  = 0.25,   -- seconds between two questions the tool asks the server while you look at a part (the server answers at most every half of it)
+    HeatCheckRadius    = 600,    -- units. The scan's radius when the tool's slider is not used (the console command's default too)
+    HeatCheckRadiusMax = 3000,   -- units. The largest radius a scan may have (the slider's top)
+    HeatCheckListMax   = 8,      -- parts listed in a scan, the hottest first
+    HeatCheckMachineClasses = { acf_lazer = true, acf_ppc = true, acf_capacitor = true }, -- the classes a scan counts as "machines" (the things heat hurts). Add acf_generator = true ... to count more
 
     -- TESTING AID
     HeatInfoDistance    = 4096,   -- units. The console command acf_lazers_heat_info prints the heat of whatever you are looking at, up to this far away
@@ -558,10 +598,131 @@ table.Merge(ACFLazers.Config, {
     RadRoundDefault   = 13,     -- units. The starting value of the slider when this model is picked (13 = the model as it is, scale 1)
 
 
+    -- ===================== THE PPC ===================== [CHANGED 22] (16) [CHANGED 23] (16.1) [CHANGED 24] (16.2)
+    -- A PPC fires ONE projectile per shot. It takes its energy from the same capacitors as a lazer (the same link tool links it), but all at once: a SHOT costs PPCEnergy... kJ, worked out over the
+    -- PPC's size the way the lazer's draw is (a mix of a straight line and an exponential between PPCEnergySmall at the smallest PPC and PPCEnergyBig at the biggest, shaped by PPCEnergyCurve).
+    -- The defaults are the lazer's draw (100 kJ/s at 20 mm, 40000 kJ/s at 300 mm, curve 0.75) TIMES 5, one second of it per shot: a 100 mm shot costs 16452 kJ, a 300 mm shot 200000 kJ.
+    -- [CHANGED 24] (16.2) 16 and 16.1 had it DOUBLED (6581 kJ at 100 mm); a shot now costs 2.5 times that (the two energy knobs below went from 200 / 80000 to 500 / 200000). The blast follows the
+    -- energy (see THE EXPLOSION), so a shot's HE is 2.5 times bigger as well; to pay more but hit the same, set PPCBlastScalar 0.4.
+    -- The projectile is one of ACF's own: it flies in a straight line (no drop, no drag), is removed after PPCLifetime seconds, and ends in an HE explosion where it hits (it does no other damage).
+    -- 16.1: the explosion never damages the contraption the PPC sits on (ACF's own "leave these out" list), and nothing in a safezone is ever damaged or heated; a PPC that is itself in a safezone
+    -- does no damage and no heat at all (its ball still flies and its explosion is still drawn). The blast also HEATS the parts it damages, in proportion to the damage (PPCHeatPerDamage below).
+    -- The explosion's filler is the shot's energy over ACF's kJ per kg of HE (ACF.HEPower, 8000), times PPCBlastScalar: at 1, a 100 mm shot is 2.06 kg of HE and a 300 mm shot 25 kg.
+    -- Every PPC knob is OPTIONAL: a config without one uses the number written here (the in-code defaults sit in the PPC helpers below, and a test keeps them equal to this block).
+    --
+    --   caliber   scale  mass(kg)  kJ per shot   HE kg   blast radius   muzzle velocity
+    --      20      0.20      60          500      0.063       126 u (3.2 m)    600 m/s
+    --      50      0.50     163         6181      0.773       289 u (7.3 m)    621 m/s
+    --     100      1.00     790        16452      2.057       400 u (10.1 m)   657 m/s
+    --     200      2.00    3755        49839      6.230       576 u (14.6 m)   729 m/s
+    --     300      3.00    9000       200000     25.000       911 u (23.1 m)   800 m/s
+    -- [CHANGED 28] (16.6) The smallest PPC is 50 mm now (PPCCaliberMin). The 20 mm row is where the size curves START (PPCCurveStart): the "Small" knobs below describe that size, and nothing is built at it.
+    PPCModel          = "models/lasers/ppc.mdl", -- the PPC. If the file is missing a PPC refuses to spawn and says so. Its muzzle is 63 units in front of its origin at scale 1 (the same end the lazer's beam starts at: the front of the model)
+    PPCCaliberMin     = 50,     -- [CHANGED 28] (16.6: was 20) mm, the muzzle diameter of the smallest PPC the tool can make (a smaller one in a dupe or a console command is made this big)
+    PPCCaliberMax     = 300,    -- mm, of the biggest
+    PPCCurveStart     = 20,     -- [CHANGED 28] (16.6) mm. The caliber the "Small" knobs belong to (PPCMassMin, PPCEnergySmall, PPCSpeedSmall, PPCHeatPctSmall, PPCFirePitchSmall): every size curve runs from here to PPCCaliberMax,
+    --                               exactly as before the minimum went up, so no PPC of 50 mm or more changed. Nothing is built at this size any more. Set it equal to PPCCaliberMin and the Small knobs describe the smallest PPC again (then re-tune them)
+    PPCCaliberBase    = 100,    -- the model is its normal size (scale 1.0) at this caliber: scale = caliber / PPCCaliberBase. 100 = the same rate as the lazer's model, as asked. [GUESS] the model's own barrel looks like about an 85 mm one at scale 1; set 85 for a model that matches its caliber exactly
+    -- Body: mass (the lazer's curve: PPCMassMin at the smallest, PPCMassMax at the biggest, bent by the exponent), and the ACF armour / health multipliers (the lazer's numbers).
+    PPCMassMin        = 60,     -- kg at PPCCurveStart (20 mm). [CHANGED 28] The smallest PPC you can build (50 mm) is 163 kg
+    PPCMassMax        = 9000,   -- kg at PPCCaliberMax
+    PPCMassExponent   = 2,      -- bends the mass curve (bigger = small PPCs stay light for longer)
+    PPCArmourMult     = 0.5,    -- multiplier on the armour ACF would give (caliber x ACF.ArmorMod): half, like the lazer
+    PPCHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
+
+    -- ENERGY PER SHOT, in kJ. The size curve: PPCEnergyCurve 0 = a straight line, 1 = fully exponential, in between = a mix (the same shape rule as LazerDrawCurve). Damage follows the energy: the more a shot
+    -- costs, the more HE it is, so the damage grows with the size the way the lazer's draw does.
+    PPCEnergySmall    = 500,    -- [CHANGED 24] (16.2: was 200) kJ one shot of the PPCCurveStart (20 mm, the start of the curve) costs: the lazer's 100 kJ/s times 5
+    PPCEnergyBig      = 200000, -- [CHANGED 24] (16.2: was 80000) kJ one shot of the biggest PPC (PPCCaliberMax) costs: the lazer's 40000 kJ/s times 5. (The biggest capacitor holds 203575 kJ: one shot and a little over)
+    PPCEnergyCurve    = 0.75,   -- like LazerDrawCurve. Clamped to 0 .. 1
+
+    -- THE PROJECTILE. Speed: PPCSpeedSmall at the smallest PPC, PPCSpeedBig at the biggest, a straight line between (metres per second).
+    PPCSpeedSmall     = 600,    -- m/s
+    PPCSpeedBig       = 800,    -- m/s
+    PPCLifetime       = 7,      -- seconds a projectile may fly before it is removed. The damage falloff below uses this same number
+    PPCDamageAtEnd    = 0.8,    -- the damage multiplier a projectile has when it is PPCLifetime seconds old: it falls in a straight line from 1 at the muzzle (0.8 = 20% less at 7 seconds). 1 = no falloff
+    -- What flies: a model and a material put over it. 16.1: an SProps sphere with the Half-Life 2 combine-ball material (a glowing sphere); an empty PPCBallMaterial keeps the model's own.
+    -- The SIZE is set in units across, not as a model scale, so changing the model later does not change how big the ball is: scale = PPCBallDiameter / PPCBallModelDiameter.
+    PPCBallModel      = "models/sprops/geometry/sphere_3.mdl",
+    PPCBallMaterial   = "models/effects/comball_sphere", -- [GUESS] the combine ball's glowing sphere material (every GMod has it). "" = no material over the model
+    PPCBallDiameter   = 10,     -- units across, the flying ball at PPCCaliberBase (100 mm); other sizes in proportion (50 mm: half of it, 300 mm: three times)
+    PPCBallModelDiameter = 3,   -- [GUESS] units across the model itself at scale 1 (an SProps "sphere_3" is 3 across). If the ball is the wrong size, measure the model and put its real width here
+
+    -- THE EXPLOSION. HE filler (kg) = kJ of the shot x PPCBlastScalar / ACF.HEPower. The blast radius and power are ACF's own for that filler.
+    PPCBlastScalar    = 1,      -- 1 = the shot's kJ become HE at ACF's rate. 2 = twice the filler (a bigger, stronger blast)
+    PPCPropDamageScalar = 1,    -- multiplier on the damage props (and people) take from the blast, on top of what ACF works out from the blast each one received. 2 = they take twice the damage
+    PPCFragmentScalar = 0,      -- multiplier on the damage from the FRAGMENT part of ACF's HE explosion. 0 = none, a pure blast; 1 = as ACF's own HE rounds
+    PPCFragMassRatio  = 0.5,    -- the casing mass handed to ACF's explosion, as a multiple of the filler (the capacitor's explosion uses 0.5 too). Only matters while PPCFragmentScalar is above 0
+    PPCBlastBackoff   = 4,      -- units: the explosion happens this far in front of the surface the projectile hit (so it is not inside the plate)
+
+    -- THE BLAST'S HEAT. [CHANGED 28] (16.6) The blast heats ONLY the parts it DAMAGES, in proportion to the damage. For every part ACF's explosion hurts (ACF decides who: the line of sight to the blast, the armour in
+    -- the way, the shooter's contraption and the safezone filters of 16.1 all apply) the damage it took from this blast (ACF health points, the blast and fragment parts added, after PPCPropDamageScalar,
+    -- PPCFragmentScalar and the shot's age factor) x PPCHeatPerDamage is added as heat (kJ). Never more than PPCHeatMaxPct percent of the heat that takes THAT part from room temperature to the HOT
+    -- temperature, so a thin, light prop is not cooked to thousands of kelvin. Parts the blast does not hurt (behind armour, out of sight, the shooter's own contraption, safezones, people) get NO heat;
+    -- the 16.1 sphere pass (everything inside the blast radius, falling off with distance, PPCHeatScalar and PPCHeatRadiusMult) is gone.
+    -- THE CATCH: ACF's blast damage to a part is  (its area / 264.7 x a falloff) x (blast penetration / its armour)^2  (the ratio never counts above 1), and a PPC blast's penetration is only 1 to 4 mm.
+    -- So damage drops with the SQUARE of the armour: a part with 50 mm of armour (a 100 mm lazer) takes almost nothing, one with 5 mm about a hundred times more, one with 2 mm or less takes the most
+    -- the blast can give (area / 264.7 x falloff). The damage of a 3000 cm2 part, a fresh shot (heat = damage x PPCHeatPerDamage, before the cap):
+    --                       100 mm shot (radius 400 u)                      300 mm shot (radius 911 u)
+    --   armour       5% of radius   25%      50%                      5% of radius   25%      50%
+    --     5 mm          1.79       0.167    0.043                         2.98       0.278    0.071
+    --    20 mm          0.112      0.010    0.003                         0.186      0.017    0.004
+    --    50 mm          0.018      0.002    0.0004                        0.030      0.003    0.0007
+    -- (The blast's damage hardly grows with the caliber: a bigger shot reaches further and pushes through a little more armour. The 16.1 heat followed the shot's energy instead.) Tune PPCHeatPerDamage with
+    -- the heat checker tool (look at what the blast did) and the "blast" toy (lz_toy blast prints the damage and heat of a part you describe, at each distance).
+    PPCHeatPerDamage  = 1000000, -- [CHANGED 28] kJ of heat per point of ACF damage the blast does to a part. The default makes a 50 mm-armoured part at 5% of a 100 mm blast's radius get about 18,000 kJ and a 20 mm one 112,000 (before the cap). 0 = the blast gives no heat
+    PPCHeatMaxPct     = 300,     -- [CHANGED 28] percent of the heat that takes a part from room temperature to the HOT temperature (HeatHotF) that ONE blast may give it: 300 = at most three times as hot as HOT. 0 = no cap (a light thin prop can get tens of thousands of kelvin)
+
+    -- FIRING. A shot is released when Fire goes from 0 to above 0, if the pool holds the shot's energy and the PPC is not still cooling.
+    PPCRefireSeconds  = 1,      -- seconds between two shots of one PPC (0 = no wait)
+    PPCAutoRepeat     = true,   -- true = holding Fire repeats the shot every PPCRefireSeconds (as soon as the pool can pay). false = one shot per press: let go and press again
+    PPCMaxPerPlayer   = 40,     -- default for the server variable sbox_maxacf_ppcs: how many PPCs one player may have (the same rule as the other four entities)
+
+    -- THE PPC'S OWN HEAT. [CHANGED 24] (16.2) A PPC heats ITSELF every time it fires and hurts itself when it is over its limit, the way a lazer does (the lazer's heat block above is the reference). Heat is kJ
+    -- above room temperature, an entity's heat capacity is its mass (kJ per kelvin = mass x HeatSpecificHeat), and it cools by itself (HeatCoolTau, HeatCoolSpeed, HeatCoolMultACF: a PPC is an "acf_"
+    -- entity, so it cools at HeatCoolMultACF times a prop's speed). A radiator in the PPC's contraption (and inside its radius) cools it like anything else: no link needed.
+    --   * every shot adds PPCHeatPctSmall .. PPCHeatPctBig percent of the PPC's limit as heat to the PPC itself, all at once ([CHANGED 26] 16.4; 16.2 and 16.3: the shot's kJ x PPCHeatSmall .. PPCHeatBig)
+    --   * its 100% is PPCHeatCapF (degrees Fahrenheit, 0% = room temperature). Over 100% it loses PPCHeatDamage percent of its MAX HEALTH per second at 200%, growing with the SQUARE of how far over it is,
+    --     and past HeatTurboStartPct the TURBO damage (HeatTurboPct, HeatTurboPower: the same knobs the lazers use) comes on top. Nothing else about the damage law is new
+    --   * if the heat kills it, it explodes with chance PPCHeatExplodeChance when it fired within the last PPCHeatFiringSeconds (or Fire is held); otherwise it just dies and the pieces fly (like a lazer)
+    --   * the explosion is PPCHeatExplosionMult times the explosion the lazer of the same size would make (1/3: "a third of the kill effect"). It follows the lazer's knobs, so retuning those retunes this too
+    --   * the shared lazer knobs apply to it as well: HeatCheckInterval, HeatMaxDeltaTime, HeatOutputInterval, HeatTurbo..., HeatIgnite... (to set players on fire add acf_ppc = true to HeatIgniteClasses)
+    -- [CHANGED 27] (16.5) THE HEAT OF A SHOT IS A PERCENT OF THE PPC'S OWN LIMIT, ON A STRAIGHT LINE OVER THE CALIBER. ONE shot adds PPCHeatPctSmall (at PPCCurveStart, 20 mm) .. PPCHeatPctBig (at PPCCaliberMax,
+    -- 300 mm) percent of the PPC's limit to its heat, a straight line between. The shipped line passes through 77% at 100 mm and 100% at 300 mm (so 20 mm gets 67.8%): a 100 mm shot takes its PPC to 77% of its limit,
+    -- a 300 mm shot exactly to its limit. (16.4 had 77 at both ends; 16.2 and 16.3 had PPCHeatSmall / PPCHeatBig, kJ of heat per kJ of the shot: gone.) The energy knobs (PPCEnergySmall / PPCEnergyBig) do not move it.
+    -- kJ of heat per shot = the percent x the PPC's limit = mass x HeatSpecificHeat x the rise to PPCHeatCapF. Nothing cools in the first second, so a SECOND shot a second later is over the limit at every size, and the
+    -- damage law takes 41% .. 422% of its max health per second (below): a PPC has to cool between shots (about 200 s at 100 mm with nothing cooling it) and a radiator is what makes it fire again.
+    -- With the shipped numbers (shots 1 s apart, nothing cooling):
+    --   caliber   mass (kg)   limit (kJ)   % of its limit per shot   heat per shot (kJ)   after two shots   damage at the second shot (% of max health per second)
+    --      20          60         13736             67.8%                     9313                135%                  41%
+    --      50         163         37317             71.25%                   26588                142%                  56%
+    --     100         790        180862             77%                     139264                153%                  89%
+    --     200        3755        859666             88.5%                   760804                176%                 203%
+    --     300        9000       2060450            100%                    2060450                199%                 422%
+    PPCHeatPctSmall   = 67.8,   -- [CHANGED 27] (16.5: was 77) percent of its own limit (PPCHeatCapF) that ONE shot at PPCCurveStart (20 mm) adds to its heat: 100 = one shot takes it to its limit, 51 was the 100 mm value in 16.2. 0 = a PPC never heats itself
+    PPCHeatPctBig     = 100,    -- [CHANGED 27] (16.5: was 77) ... and of the biggest (PPCCaliberMax), a straight line between (like HeatLazerSmall .. HeatLazerBig). The line through (100 mm, 77%) and (300 mm, 100%) gives 67.8 at 20 mm
+    PPCHeatCapF       = 900,    -- degrees Fahrenheit. 100% of a PPC (the same 900 as your HeatLazerCapF, but its own knob so the two can be tuned apart)
+    PPCHeatDamage     = 4,      -- percent of a PPC's MAX HEALTH lost per second when it is twice as hot as its limit (200%), growing with the square of how far over it is (like HeatLazerDamage). 0 = a PPC never hurts itself (no turbo either)
+    PPCHeatExplodeChance = 0.8, -- 0..1. A PPC that dies of its own heat explodes with this chance when it fired recently (see PPCHeatFiringSeconds); otherwise it just dies. 0.8 = your HeatExplodeChance
+    PPCHeatExplosionMult = 1 / 3, -- the death explosion's HE filler = this x the filler a LAZER of the same size makes when it explodes (GetLazerExplosionFiller: its draw x HeatExplodeKJMult over ACF's kJ per kg of HE x HeatExplosionMult). 1/3 = a third of the lazer's. A 100 mm PPC: 0.27 kg of HE
+    PPCHeatDeathDebrisPower = 20000, -- [GUESS] how hard the pieces fly when a PPC just dies of heat (the lazer's HeatDeathDebrisPower; capped by MaxDebrisPower)
+    PPCHeatFiringSeconds = 5,   -- a PPC counts as "firing" (for the explosion dice) this many seconds after its last shot, and while Fire is held
+
+    -- THE PPC'S FIRE SOUND. [CHANGED 24] (16.2) Every shot plays TWO layers, both Half-Life 2 sounds that every Garry's Mod has: PPCFireSound is the burst, PPCFireSound2 the electric crackle on top. A text is one
+    -- sound, a list { "a.wav", "b.wav" } picks one at random each shot, "" (or an empty list) is none. The paths are relative to the game's sound folder; they were checked against the Garry's Mod wiki's HL2 sound
+    -- list [SEEN], but nobody here has HEARD them: to try one, type  play ambient/energy/whiteflash.wav  in the game console. Other candidates: ambient/levels/citadel/portal_beam_shoot1.wav .. 6, ambient/levels/citadel/
+    -- weapon_disintegrate1.wav .. 4, ambient/levels/labs/electric_explosion1.wav .. 5 (a loud electrical bang: more an explosion), ambient/energy/weld1.wav, weld2.wav, spark1.wav .. 6.
+    PPCFireSound      = "ambient/energy/whiteflash.wav", -- [GUESS] the burst: a bright electrical flash. "" = none
+    PPCFireSound2     = { "ambient/energy/zap1.wav", "ambient/energy/zap2.wav", "ambient/energy/zap3.wav", "ambient/energy/zap5.wav", "ambient/energy/zap6.wav", "ambient/energy/zap7.wav", "ambient/energy/zap8.wav", "ambient/energy/zap9.wav" }, -- [GUESS] the crackle: electric zaps (there is no zap4)
+    PPCFireSoundLevel = 100,    -- sound level in decibels (Source's SNDLVL): how far it carries. 75 = a normal voice, 100 = a gunshot, 120+ = heard across a map
+    PPCFireVolume     = 1,      -- 0..1, the burst
+    PPCFireVolume2    = 0.8,    -- 0..1, the crackle
+    PPCFirePitchSmall = 125,    -- pitch of the smallest PPC (100 = the file as it is, higher = higher and shorter) ...
+    PPCFirePitchBig   = 75,     -- ... and of the biggest, a straight line between: a big PPC sounds deeper. Clamped to 20 .. 255
     -- ===================== LINKING TOOLS =====================
     -- The things the link tools (right-click / shift / reload on the lazer, capacitor and generator tools) can select and link. ACF's own link system decides which PAIRS work:
-    --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor, radiator <-> radiator (a pool).
-    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine", acf_radiator = "radiator" }, -- class -> the word used in chat messages [CHANGED 6]
+    --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor, PPC <-> capacitor, radiator <-> radiator (a pool).
+    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine", acf_radiator = "radiator", acf_ppc = "PPC" }, -- class -> the word used in chat messages [CHANGED 6] [CHANGED 22]
 
     -- ===================== WOBBLE: A DAMAGED LAZER LOSES ITS AIM =====================
     -- The lower a lazer's health, the more its beam drifts away from where it points. The drift is SMOOTH (it slowly wanders around, it never
@@ -855,6 +1016,116 @@ function ACFLazers.GetCapMass(diameter)
     return math.max(1, math.Round(ACFLazers.Config.CapMassPerVolume * ACFLazers.GetCapVolume(diameter)))
 end
 
+-- ===================== SAFEZONE + AUTO-FOCUS HELPERS (pure logic: they read entities and numbers, they change nothing) ===================== [CHANGED 23]
+-- 16.1. The safezone rules used to be written out inside the lazer's init.lua. The PPC needs the same rules, so they live here now and both use them (one set of rules, one place to fix).
+
+-- The names safezone addons put on an entity to say "protected". An addon may define the name as a plain field OR as a method (ent:InSafeZone()).
+ACFLazers.SafezoneFlagNames = { "InSafeZone", "InSafezone", "IsSafe", "GetInSafezone" }
+
+--- One flag of one entity. THE BUG THE LAZER FIXED EARLIER: the old check treated "the name exists on the entity" as "yes, it is in a safezone"; an addon that defines the name as a METHOD gives
+--- every entity that name. So a method is CALLED and its answer is used (inside a pcall), and a plain field is read as it is. Returns the answer and whether it came from a "method" or a "field".
+function ACFLazers.ReadSafezoneFlag(ent, name)
+    local v = ent[name]
+
+    if type(v) == "function" then
+        local ok, res = pcall(v, ent)
+
+        return (ok and res) and true or false, "method"
+    end
+
+    return v and true or false, "field"
+end
+
+--- Is this entity marked as inside a safezone by a safezone ADDON (any of the flag names says yes)? An invalid entity is not.
+function ACFLazers.IsEntityInSafezone(ent)
+    if not IsValid(ent) then return false end
+
+    for _, name in ipairs(ACFLazers.SafezoneFlagNames) do
+        if ACFLazers.ReadSafezoneFlag(ent, name) then return true end
+    end
+
+    return false
+end
+
+--- For the notices: WHICH flags said "safe", and whether each is a plain field or a method that answered yes (so you know which addon it is).
+function ACFLazers.SafezoneFlags(ent)
+    local found = {}
+
+    for _, name in ipairs(ACFLazers.SafezoneFlagNames) do
+        local yes, kind = ACFLazers.ReadSafezoneFlag(ent, name)
+
+        if yes then found[#found + 1] = name .. " (" .. kind .. " says yes)" end
+    end
+
+    return #found > 0 and table.concat(found, ", ") or "none?"
+end
+
+--- For the notices: WHY an entity counts as protected, in words. The addon flags (SafezoneFlags) and/or "inside one of ACF's own safezones".
+function ACFLazers.DescribeSafezone(ent)
+    local why = {}
+
+    if ACFLazers.IsEntityInSafezone(ent) then why[#why + 1] = "flags: " .. ACFLazers.SafezoneFlags(ent) end
+    if IsValid(ent) and ACFLazers.IsInACFSafezone(ent:GetPos()) then why[#why + 1] = "it stands inside one of ACF's own safezones" end
+
+    return #why > 0 and table.concat(why, "; ") or "nothing: it is not protected"
+end
+
+--- Is this position inside one of ACF's OWN safezones (the ones ACF_AddSafeZone makes)? False when safezones are off or none are defined. A failing lookup counts as "no".
+function ACFLazers.IsInACFSafezone(pos)
+    local P = ACF and ACF.Permissions
+
+    if not (ACF and ACF.EnableSafezones and type(P) == "table" and P.Safezones and type(P.IsInSafezone) == "function") or not pos then return false end
+
+    local ok, zone = pcall(P.IsInSafezone, pos)
+
+    return (ok and zone) and true or false
+end
+
+--- Protected by ANY kind of safezone: marked by an addon, or standing inside one of ACF's own zones.
+function ACFLazers.IsProtectedBySafezone(ent)
+    if not IsValid(ent) then return false end
+
+    if ACFLazers.IsEntityInSafezone(ent) then return true end
+
+    return ACFLazers.IsInACFSafezone(ent:GetPos())
+end
+
+--- Is automatic focus on? LazerAutoFocus: false (or 0) = off, true / a number of 1 or more / missing = on.
+function ACFLazers.AutoFocusOn()
+    local v = ACFLazers.Config.LazerAutoFocus
+
+    if v == false then return false end
+    if v == true then return true end
+    if tonumber(v) then return tonumber(v) >= 1 end
+
+    return true
+end
+
+--- How fast the focal length may move, in units per second (LazerFocusSpeed). A missing or junk number is 1000; 0 freezes the focus; a negative number counts as 0.
+--- `speed` is optional: a number to use INSTEAD of the config's (the console toys use it to try speeds without touching the config); the same rules apply to it.
+function ACFLazers.GetFocusSpeed(speed)
+    local v = tonumber(speed == nil and ACFLazers.Config.LazerFocusSpeed or speed)
+
+    if not v or v ~= v or v == math.huge or v == -math.huge then return 1000 end
+
+    return math.max(v, 0)
+end
+
+--- One step of the automatic focus. `current` is the focal length now, `target` the distance to what the beam hit, `dt` the seconds since the last step. Both are held inside the focal limits of
+--- this caliber (GetFocalLimits: the same ones the tool's slider and the lazer's VerifyData use), then the focal length moves toward the target by at most GetFocusSpeed() x dt. Returns the new length.
+--- `speed` (optional) replaces the config's LazerFocusSpeed for this one call.
+function ACFLazers.StepFocus(current, target, dt, caliber, speed)
+    local low, high = ACFLazers.GetFocalLimits(caliber)
+    local now  = ACFLazers.ClampNumber(current, ACFLazers.Config.FocalDefault, low, high)
+    local goal = ACFLazers.ClampNumber(target, now, low, high)
+    local step = ACFLazers.GetFocusSpeed(speed) * math.max(tonumber(dt) or 0, 0)
+
+    if step ~= step then step = 0 end
+    if math.abs(goal - now) <= step then return goal end
+
+    return now + (goal > now and step or -step)
+end
+
 -- ===================== HEAT HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 2]
 
 --- Fahrenheit <-> kelvin.
@@ -1024,6 +1295,358 @@ function ACFLazers.GetLazerExplosionFiller(caliber)
     local hePower = ACF and tonumber(ACF.HEPower) or C.HeatHEPowerFallback
 
     return ACFLazers.GetDrawRate(caliber) * C.HeatExplodeKJMult / math.max(hePower, 1e-6) * C.HeatExplosionMult
+end
+
+-- ===================== PPC HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 22] [CHANGED 23] [CHANGED 24]
+-- Every PPC knob is optional: PPCNumber / PPCString / PPCFlag give the number in the config, or, when the config has none (or junk), the default written below. The table is kept equal to the
+-- knob block above by a test, so there is ONE set of numbers to read.
+
+local PPCNumberDefaults = {
+    PPCCaliberMin = 50, PPCCurveStart = 20, PPCCaliberMax = 300, PPCCaliberBase = 100,
+    PPCMassMin = 60, PPCMassMax = 9000, PPCMassExponent = 2, PPCArmourMult = 0.5, PPCHealthMult = 1,
+    PPCEnergySmall = 500, PPCEnergyBig = 200000, PPCEnergyCurve = 0.75,
+    PPCSpeedSmall = 600, PPCSpeedBig = 800, PPCLifetime = 7, PPCDamageAtEnd = 0.8, PPCBallDiameter = 10, PPCBallModelDiameter = 3,
+    PPCBlastScalar = 1, PPCPropDamageScalar = 1, PPCFragmentScalar = 0, PPCFragMassRatio = 0.5, PPCBlastBackoff = 4, PPCHeatPerDamage = 1000000, PPCHeatMaxPct = 300,
+    PPCRefireSeconds = 1, PPCMaxPerPlayer = 40,
+    PPCHeatPctSmall = 67.8, PPCHeatPctBig = 100, PPCHeatCapF = 900, PPCHeatDamage = 4, PPCHeatExplodeChance = 0.8, PPCHeatExplosionMult = 1 / 3,
+    PPCHeatDeathDebrisPower = 20000, PPCHeatFiringSeconds = 5,
+    PPCFireSoundLevel = 100, PPCFireVolume = 1, PPCFireVolume2 = 0.8, PPCFirePitchSmall = 125, PPCFirePitchBig = 75,
+}
+
+local PPCStringDefaults = {
+    PPCModel = "models/lasers/ppc.mdl", PPCBallModel = "models/sprops/geometry/sphere_3.mdl", PPCBallMaterial = "models/effects/comball_sphere",
+}
+
+local PPCFlagDefaults = { PPCAutoRepeat = true }
+
+-- [CHANGED 24] (16.2) The two fire-sound layers: a text, or a list of texts (one picked at random each shot).
+local PPCSoundDefaults = {
+    PPCFireSound  = "ambient/energy/whiteflash.wav",
+    PPCFireSound2 = { "ambient/energy/zap1.wav", "ambient/energy/zap2.wav", "ambient/energy/zap3.wav", "ambient/energy/zap5.wav", "ambient/energy/zap6.wav", "ambient/energy/zap7.wav", "ambient/energy/zap8.wav", "ambient/energy/zap9.wav" },
+}
+
+ACFLazers.PPCNumberDefaults = PPCNumberDefaults
+ACFLazers.PPCStringDefaults = PPCStringDefaults
+ACFLazers.PPCFlagDefaults   = PPCFlagDefaults
+ACFLazers.PPCSoundDefaults  = PPCSoundDefaults
+
+-- The name of the PPC's projectile type inside ACF (lua/acf/entities/ammo_types/lazers_ppc.lua registers it, the PPC names it on every projectile and on itself for the client's bullet picture).
+ACFLazers.PPCAmmoID = "LazerPPC"
+
+--- A PPC number: the config's, or the default when the config has no real number there.
+function ACFLazers.PPCNumber(name)
+    local v = tonumber(ACFLazers.Config[name])
+
+    if not v or v ~= v or v == math.huge or v == -math.huge then return PPCNumberDefaults[name] end
+
+    return v
+end
+
+--- A PPC text (a model or material path): the config's, or the default when the config has no text there. An empty text is a real answer (no material).
+function ACFLazers.PPCString(name)
+    local v = ACFLazers.Config[name]
+
+    if type(v) == "string" then return v end
+
+    return PPCStringDefaults[name]
+end
+
+--- A PPC on/off switch: true or a number of 1 or more is on, false or a smaller number is off, anything else is the default.
+function ACFLazers.PPCFlag(name)
+    local v = ACFLazers.Config[name]
+
+    if v == true then return true end
+    if v == false then return false end
+    if tonumber(v) then return tonumber(v) >= 1 end
+
+    return PPCFlagDefaults[name]
+end
+
+--- A caliber from a player (tool, dupe, console) held inside the PPC range; junk becomes PPCCaliberBase.
+function ACFLazers.ClampPPCCaliber(caliber)
+    local low  = ACFLazers.PPCNumber("PPCCaliberMin")
+    local high = math.max(ACFLazers.PPCNumber("PPCCaliberMax"), low)
+
+    return ACFLazers.ClampNumber(caliber, ACFLazers.PPCNumber("PPCCaliberBase"), low, high)
+end
+
+--- 0 at the start of the size curves (PPCCurveStart, 20 mm) ... 1 at the biggest PPC (PPCCaliberMax). Mass, energy, speed, heat per shot and fire pitch use it. [CHANGED 28] It starts at PPCCurveStart, not
+--- at PPCCaliberMin (the smallest PPC you can build), so raising the minimum does not move any curve.
+function ACFLazers.GetPPCSizeFraction(caliber)
+    local low  = ACFLazers.PPCNumber("PPCCurveStart")
+    local high = ACFLazers.PPCNumber("PPCCaliberMax")
+
+    return math.Clamp(((tonumber(caliber) or low) - low) / math.max(high - low, 0.0001), 0, 1)
+end
+
+--- How big the PPC model is for a caliber. 1.0 at PPCCaliberBase.
+function ACFLazers.GetPPCScale(caliber)
+    return caliber / math.max(ACFLazers.PPCNumber("PPCCaliberBase"), 0.0001)
+end
+
+--- Mass in kg for a caliber (the lazer's rule with the PPC's numbers).
+function ACFLazers.GetPPCMass(caliber)
+    local t = ACFLazers.GetPPCSizeFraction(caliber)
+    local lo, hi = ACFLazers.PPCNumber("PPCMassMin"), ACFLazers.PPCNumber("PPCMassMax")
+
+    return math.Round(lo + (hi - lo) * t ^ ACFLazers.PPCNumber("PPCMassExponent"))
+end
+
+--- kJ one shot of this caliber costs: PPCEnergySmall at the smallest PPC and PPCEnergyBig at the biggest; in between a mix of a straight line and an exponential curve (PPCEnergyCurve), the way
+--- GetDrawRate does it for the lazer.
+function ACFLazers.GetPPCShotEnergy(caliber)
+    local t      = ACFLazers.GetPPCSizeFraction(caliber)
+    local small  = math.max(ACFLazers.PPCNumber("PPCEnergySmall"), 1e-6)
+    local big    = math.max(ACFLazers.PPCNumber("PPCEnergyBig"), 1e-6)
+    local linear = Lerp(t, small, big)
+    local expo   = small * (big / small) ^ t
+    local mix    = math.Clamp(ACFLazers.PPCNumber("PPCEnergyCurve"), 0, 1)
+
+    return Lerp(mix, linear, expo)
+end
+
+--- Muzzle velocity in metres per second: PPCSpeedSmall at the smallest PPC, PPCSpeedBig at the biggest, a straight line between.
+function ACFLazers.GetPPCSpeed(caliber)
+    return Lerp(ACFLazers.GetPPCSizeFraction(caliber), ACFLazers.PPCNumber("PPCSpeedSmall"), ACFLazers.PPCNumber("PPCSpeedBig"))
+end
+
+--- kJ per kg of HE: ACF's own number, or the heat block's fallback when ACF is not there yet.
+function ACFLazers.GetPPCHePower()
+    local power = ACF and tonumber(ACF.HEPower) or tonumber(ACFLazers.Config.HeatHEPowerFallback) or 8000
+
+    return math.max(power, 1e-6)
+end
+
+--- HE filler (kg) of one shot: its kJ x PPCBlastScalar over ACF's kJ per kg.
+function ACFLazers.GetPPCFillerMass(caliber)
+    return ACFLazers.GetPPCShotEnergy(caliber) * math.max(ACFLazers.PPCNumber("PPCBlastScalar"), 0) / ACFLazers.GetPPCHePower()
+end
+
+--- Blast radius in units for a shot of this caliber. ACF's own law when ACF is there (ACF.Damage.getBlastRadius), the same law written out when it is not.
+function ACFLazers.GetPPCBlastRadius(caliber)
+    local filler = ACFLazers.GetPPCFillerMass(caliber)
+    local Damage = ACF and ACF.Damage
+
+    if Damage and type(Damage.getBlastRadius) == "function" then return Damage.getBlastRadius(filler) end
+
+    return filler ^ 0.33 * 8 * ((ACF and tonumber(ACF.MeterToInch)) or 39.3701)
+end
+
+--- The damage multiplier of a projectile that has flown `age` seconds: 1 at the muzzle, PPCDamageAtEnd at PPCLifetime, a straight line between, and PPCDamageAtEnd after that.
+function ACFLazers.GetPPCDamageMult(age)
+    local life = math.max(ACFLazers.PPCNumber("PPCLifetime"), 0.0001)
+    local f    = math.Clamp((tonumber(age) or 0) / life, 0, 1)
+
+    return Lerp(f, 1, math.max(ACFLazers.PPCNumber("PPCDamageAtEnd"), 0))
+end
+
+--- The model scale of the flying ball for a caliber: PPCBallDiameter units across at PPCCaliberBase (in proportion at other sizes), over the model's own width at scale 1 (PPCBallModelDiameter).
+function ACFLazers.GetPPCBallScale(caliber)
+    return ACFLazers.GetPPCScale(caliber) * math.max(ACFLazers.PPCNumber("PPCBallDiameter"), 0) / math.max(ACFLazers.PPCNumber("PPCBallModelDiameter"), 0.0001)
+end
+
+--- [CHANGED 28] (16.6) kJ of heat a part gets from a PPC blast that did it `damage` points of ACF damage: damage x PPCHeatPerDamage, but never more than PPCHeatMaxPct percent of the heat that takes a part of
+--- heat capacity `capacity` (kJ per kelvin) from room temperature to the HOT temperature (PPCHeatMaxPct 0 = no limit; no capacity given = no limit). Junk, nothing and a negative number give 0.
+function ACFLazers.GetPPCDamageHeat(damage, capacity)
+    damage = tonumber(damage) or 0
+
+    if damage ~= damage or damage <= 0 then return 0 end
+
+    local kJ  = damage * math.max(ACFLazers.PPCNumber("PPCHeatPerDamage"), 0)
+    local pct = math.max(ACFLazers.PPCNumber("PPCHeatMaxPct"), 0)
+
+    capacity = tonumber(capacity)
+
+    if pct > 0 and capacity and capacity == capacity and capacity > 0 then
+        kJ = math.min(kJ, pct / 100 * capacity * ACFLazers.GetHeatRiseHot())
+    end
+
+    if kJ ~= kJ or kJ == math.huge then return 0 end
+
+    return kJ
+end
+
+--- [CHANGED 24] (16.2) The sounds one fire layer may play, as a list of texts: the config's text or list (empty texts dropped); the default when the config has no text or list there; an empty list
+--- when the config says "" or false (none).
+function ACFLazers.PPCSoundList(name)
+    local v = ACFLazers.Config[name]
+
+    if v == false then return {} end
+    if type(v) ~= "string" and type(v) ~= "table" then v = PPCSoundDefaults[name] end
+
+    local out = {}
+
+    if type(v) == "string" then
+        if v ~= "" then out[1] = v end
+    elseif type(v) == "table" then
+        for _, s in ipairs(v) do
+            if type(s) == "string" and s ~= "" then out[#out + 1] = s end
+        end
+    end
+
+    return out
+end
+
+--- One sound of a fire layer, picked at random (nil = this layer is silent). `pick` is only for tests: pick(n) returns a whole number from 1 to n.
+function ACFLazers.PickPPCSound(name, pick)
+    local list = ACFLazers.PPCSoundList(name)
+
+    if #list == 0 then return nil end
+
+    local i = pick and pick(#list) or math.random(#list)
+
+    return list[math.Clamp(math.floor(tonumber(i) or 1), 1, #list)]
+end
+
+--- Pitch (percent, 100 = the file as it is) of a PPC's fire sound: PPCFirePitchSmall at the smallest PPC, PPCFirePitchBig at the biggest, a straight line between; held to what the engine takes (20 .. 255).
+function ACFLazers.GetPPCFirePitch(caliber)
+    return math.Clamp(Lerp(ACFLazers.GetPPCSizeFraction(caliber), ACFLazers.PPCNumber("PPCFirePitchSmall"), ACFLazers.PPCNumber("PPCFirePitchBig")), 20, 255)
+end
+
+--- The PPC's 100%, in kelvin above room temperature (its PPCHeatCapF).
+function ACFLazers.GetPPCHeatRise()
+    return ACFLazers.GetHeatRiseK(ACFLazers.PPCNumber("PPCHeatCapF"))
+end
+
+--- [CHANGED 26] (16.4) Percent of the PPC's OWN limit that one shot of this caliber adds to its heat: PPCHeatPctSmall at the smallest, PPCHeatPctBig at the biggest, a straight line between (never below 0).
+function ACFLazers.GetPPCHeatPct(caliber)
+    return math.max(Lerp(ACFLazers.GetPPCSizeFraction(caliber), ACFLazers.PPCNumber("PPCHeatPctSmall"), ACFLazers.PPCNumber("PPCHeatPctBig")), 0)
+end
+
+--- kJ of heat that is 100% of a PPC of this caliber: its mass x HeatSpecificHeat (its heat capacity, kJ per kelvin) x the rise to PPCHeatCapF.
+function ACFLazers.GetPPCLimitKJ(caliber)
+    return ACFLazers.GetHeatCapacity(ACFLazers.GetPPCMass(caliber)) * ACFLazers.GetPPCHeatRise()
+end
+
+--- kJ of heat one shot gives the PPC ITSELF: that percent of its limit. (What the blast gives the parts it damages is GetPPCDamageHeat.)
+function ACFLazers.GetPPCShotHeat(caliber)
+    return ACFLazers.GetPPCHeatPct(caliber) / 100 * ACFLazers.GetPPCLimitKJ(caliber)
+end
+
+--- HE filler (kg) of the explosion of a PPC that dies of its heat while firing: PPCHeatExplosionMult x what the lazer of the same size makes (GetLazerExplosionFiller).
+function ACFLazers.GetPPCDeathFiller(caliber)
+    return ACFLazers.GetLazerExplosionFiller(caliber) * math.max(ACFLazers.PPCNumber("PPCHeatExplosionMult"), 0)
+end
+
+--- Everything the tool screen and the hover text show about a PPC of this caliber, in one table.
+function ACFLazers.GetPPCReadout(caliber)
+    local filler = ACFLazers.GetPPCFillerMass(caliber)
+    local radius = ACFLazers.GetPPCBlastRadius(caliber)
+    local shotHeat = ACFLazers.GetPPCShotHeat(caliber) -- [CHANGED 24]
+    local limitKJ  = ACFLazers.GetPPCLimitKJ(caliber) -- kJ of heat that is 100% of this PPC
+
+    return {
+        caliber    = caliber,
+        scale      = ACFLazers.GetPPCScale(caliber),
+        mass       = ACFLazers.GetPPCMass(caliber),
+        energy     = ACFLazers.GetPPCShotEnergy(caliber),
+        speed      = ACFLazers.GetPPCSpeed(caliber),
+        filler     = filler,
+        radius     = radius,                                                  -- units
+        radiusM    = radius / ((ACF and tonumber(ACF.MeterToInch)) or 39.3701), -- metres
+        lifetime   = ACFLazers.PPCNumber("PPCLifetime"),
+        damageEnd  = ACFLazers.PPCNumber("PPCDamageAtEnd"),
+        refire     = ACFLazers.PPCNumber("PPCRefireSeconds"),
+        range      = ACFLazers.GetPPCSpeed(caliber) * ((ACF and tonumber(ACF.MeterToInch)) or 39.3701) * ACFLazers.PPCNumber("PPCLifetime"), -- units flown in PPCLifetime
+        heat       = shotHeat,                                          -- [CHANGED 24] kJ of heat one shot gives the PPC itself
+        heatPct    = shotHeat / math.max(limitKJ, 1e-6) * 100,          -- ... as a percent of its limit (before any cooling)
+        deathFiller = ACFLazers.GetPPCDeathFiller(caliber),             -- kg of HE of its death explosion
+    }
+end
+
+-- ===================== HEAT CHECKER HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 28]
+-- Every knob is optional: HeatCheckNumber gives the number in the config, or the default written here.
+
+local HeatCheckDefaults = { HeatCheckDistance = 4096, HeatCheckQueryInterval = 0.25, HeatCheckRadius = 600, HeatCheckRadiusMax = 3000, HeatCheckListMax = 8 }
+local HeatCheckMachineDefaults = { acf_lazer = true, acf_ppc = true, acf_capacitor = true }
+
+ACFLazers.HeatCheckDefaults        = HeatCheckDefaults
+ACFLazers.HeatCheckMachineDefaults = HeatCheckMachineDefaults
+
+--- A heat checker number: the config's, or the default when the config has no real number there.
+function ACFLazers.HeatCheckNumber(name)
+    local v = tonumber(ACFLazers.Config[name])
+
+    if not v or v ~= v or v == math.huge or v == -math.huge then return HeatCheckDefaults[name] end
+
+    return v
+end
+
+--- A scan radius from a player (slider, console): junk is HeatCheckRadius, and it is held between 50 units and HeatCheckRadiusMax.
+function ACFLazers.ClampHeatCheckRadius(radius)
+    local high = math.max(ACFLazers.HeatCheckNumber("HeatCheckRadiusMax"), 50)
+
+    return ACFLazers.ClampNumber(radius, ACFLazers.HeatCheckNumber("HeatCheckRadius"), 50, high)
+end
+
+--- Does a scan count this class as a machine (a thing heat hurts)? The config's table, or the default one when the config has no table there (false or {} = none).
+function ACFLazers.IsHeatMachine(class)
+    local list = ACFLazers.Config.HeatCheckMachineClasses
+
+    if type(list) ~= "table" then
+        if list == false then return false end
+
+        list = HeatCheckMachineDefaults
+    end
+
+    return list[class] == true
+end
+
+--- Sums up a scan. rows = { { class, mass, kJ, riseK (kelvin above room), machine (true/false), ... } }, power = RadWeightPower (a radiator shares by riseK ^ power), listMax = rows to keep.
+--- Parts with no heat are left out. Returns { count, totalKJ, totalWeight, power, machines = { count, kJ, weight, hottestK }, plain = { same }, weightShare (what the machines would get of a
+--- radiator's work, 0 .. 1), kJShare (what share of the heat they hold), top = the listMax hottest rows (by temperature, then kJ) }.
+function ACFLazers.HeatScanSummary(rows, power, listMax)
+    power = tonumber(power)
+
+    if not power or power ~= power then power = 1 end
+
+    listMax = tonumber(listMax)
+
+    if not listMax or listMax ~= listMax then listMax = 8 end
+
+    listMax = math.max(math.floor(listMax), 0)
+
+    local S    = { count = 0, totalKJ = 0, totalWeight = 0, power = power, machines = { count = 0, kJ = 0, weight = 0, hottestK = 0 }, plain = { count = 0, kJ = 0, weight = 0, hottestK = 0 }, top = {}, weightShare = 0, kJShare = 0 }
+    local list = {}
+
+    for index, row in ipairs(rows or {}) do
+        local kJ    = tonumber(row.kJ) or 0
+        local riseK = tonumber(row.riseK) or 0
+
+        if kJ > 0 and kJ == kJ and riseK > 0 and riseK == riseK then
+            local weight = riseK ^ power
+
+            if weight ~= weight or weight <= 0 then weight = 1e-9 end -- (the radiator does the same: a hot part always counts a little)
+
+            local group = row.machine and S.machines or S.plain
+
+            group.count  = group.count + 1
+            group.kJ     = group.kJ + kJ
+            group.weight = group.weight + weight
+
+            if riseK > group.hottestK then group.hottestK = riseK end
+
+            S.count       = S.count + 1
+            S.totalKJ     = S.totalKJ + kJ
+            S.totalWeight = S.totalWeight + weight
+
+            list[#list + 1] = { row = row, index = index, kJ = kJ, riseK = riseK }
+        end
+    end
+
+    table.sort(list, function(a, b)
+        if a.riseK ~= b.riseK then return a.riseK > b.riseK end
+        if a.kJ ~= b.kJ then return a.kJ > b.kJ end
+
+        return a.index < b.index
+    end)
+
+    for i = 1, math.min(listMax, #list) do S.top[i] = list[i].row end
+
+    if S.totalWeight > 0 then S.weightShare = S.machines.weight / S.totalWeight end
+    if S.totalKJ > 0 then S.kJShare = S.machines.kJ / S.totalKJ end
+
+    return S
 end
 
 -- ===================== RADIATOR HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 5]

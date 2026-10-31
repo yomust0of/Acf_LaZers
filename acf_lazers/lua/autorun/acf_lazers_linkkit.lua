@@ -1,6 +1,7 @@
 -- =========================================================================
 -- NEW (12), fixed in 12.1 (AddCSLuaFile). Goes to:  lua/autorun/acf_lazers_linkkit.lua
 -- 15.2: only the TEXTS changed (the messages and help lines now mention radiators); the code is the same. Which things the tools react to is the config's LinkClasses.
+-- 16: only the TEXTS changed again (they name PPCs); the code is the same.
 --
 -- THE LINK KIT: the linking part of every tool of this addon, written ONCE. A tool file adds one line, after its own settings:
 --
@@ -72,7 +73,7 @@ if CLIENT then
     -- The info lines and chat texts. `left` is that tool's own left-click line.
     function Kit.AddLanguage(mode, left)
         language.Add("tool." .. mode .. ".left", left)
-        language.Add("tool." .. mode .. ".right", "Link: click an engine, generator, capacitor, lazer or radiator first (it turns green), then click what to link everything green to (engine > generator > capacitor > lazer; radiator <-> radiator)")
+        language.Add("tool." .. mode .. ".right", "Link: click an engine, generator, capacitor, lazer, PPC or radiator first (it turns green), then click what to link everything green to (engine > generator > capacitor > lazer or PPC; radiator <-> radiator)")
         language.Add("tool." .. mode .. ".right_shift", "(Hold Shift) Add another thing to the selection, or take a selected thing off it")
         language.Add("tool." .. mode .. ".reload", "Unlink: aim at the one to unlink the selected things from (nothing selected = break all links of what you aim at)")
         language.Add("tool." .. mode .. ".0", "Left-click: " .. left .. ".  Right-click: select / link.  Shift + right-click: select more.  Reload: unlink.")
@@ -295,7 +296,7 @@ function Kit.Install(TOOL, mode, left)
         if not Kit.IsLinkable(hit) then
             UnselectAll(self)
 
-            Say(ply, "Info", "Link: selection cleared. Aim at an engine, a generator, a capacitor, a lazer or a radiator.")
+            Say(ply, "Info", "Link: selection cleared. Aim at an engine, a generator, a capacitor, a lazer, a PPC or a radiator.")
 
             return false
         end
@@ -347,7 +348,7 @@ function Kit.Install(TOOL, mode, left)
         local hit = trace.Entity
 
         if not Kit.IsLinkable(hit) then
-            Say(ply, "Info", "Unlink: aim at an engine, a generator, a capacitor, a lazer or a radiator.")
+            Say(ply, "Info", "Unlink: aim at an engine, a generator, a capacitor, a lazer, a PPC or a radiator.")
 
             return false
         end

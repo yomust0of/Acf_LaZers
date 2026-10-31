@@ -165,6 +165,21 @@ local function GatherHot(live)
     return hot, weights, limits, avail
 end
 
+-- [CHANGED 6] (16.6) For the heat checker: what the pool took out of a part in this sweep (kJ per second), and what the whole pool took. Written onto the part itself (ACFL_RadOut, ACFL_RadPool, ACFL_RadOutT) and
+-- read only by Heat.Describe. A part that two pools cool in one sweep gets the two added (the pool rate shown is the last one's). Nothing here changes any heat.
+local function NoteTaken(ent, kJ, dt, now, poolRate)
+    if dt <= 0 then return end
+
+    if ent.ACFL_RadOutT == now then
+        ent.ACFL_RadOut = (ent.ACFL_RadOut or 0) + kJ / dt
+    else
+        ent.ACFL_RadOut = kJ / dt
+    end
+
+    ent.ACFL_RadOutT = now
+    ent.ACFL_RadPool = poolRate
+end
+
 -- One pool, one sweep. `dt` = seconds since the last sweep.
 function Rad.RunGroup(group, now, dt)
     local live = {}
@@ -221,7 +236,11 @@ function Rad.RunGroup(group, now, dt)
         local takes = ACFLazers.WeightedFill(weights, limits, total)
 
         for i, ent in ipairs(hot) do
-            if takes[i] > 0 and IsValid(ent) then Heat.Add(ent, -takes[i]) end
+            if IsValid(ent) then
+                NoteTaken(ent, takes[i], dt, now, dt > 0 and total / dt or 0)
+
+                if takes[i] > 0 then Heat.Add(ent, -takes[i]) end
+            end
         end
     end
 
@@ -237,6 +256,7 @@ function Rad.RunGroup(group, now, dt)
             for i, ent in ipairs(hot2) do
                 if takes2[i] > 0 and IsValid(ent) then
                     Heat.Add(ent, -takes2[i])
+                    NoteTaken(ent, takes2[i], dt, now, dt > 0 and (total + boiled + takes2[i]) / dt or 0)
 
                     boiled = boiled + takes2[i]
                 end
