@@ -73,7 +73,14 @@
 --      the radius (set by the HE filler, that is by the shot's energy and PPCBlastScalar) and the list of parts it reaches do not move. ACF's own maths still decides what blocks what: a part the damage now kills no
 --      longer shields what is behind it. (b) THE BLAST'S HEAT IS 0.6 TIMES WHAT IT WAS: PPCHeatPerDamage 1000000 -> 30000 (20 times the damage x 0.03 of the old heat per point = 0.6 x the 16.6 heat).
 --      (c) PPCMassMin 60 -> 120 (a 50 mm PPC 163 -> 222 kg, 100 mm 790 -> 845, 200 mm 3755 -> 3790, 300 mm 9000 as before), so each PPC's heat limit and the kJ one shot adds went up with it (tables below).
---      (d) THE ENTITY LIMITS ARE SET TO THEIR KNOBS AT EVERY SERVER START: new optional knob EntityLimitsFromConfig (true), used by the file lua/autorun/server/acf_lazers_limits.lua (see LazerMaxPerPlayer).
+--          (16.8: PPCMassMin is 255 now, see item 30.)
+--      (d) (16.7 ONLY, REMOVED IN 16.8) the knob EntityLimitsFromConfig and the file lua/autorun/server/acf_lazers_limits.lua that set the five entity limits at every start: the server's own settings do that now,
+--          and the limits file is the comment-only one again (so a config that still has the line EntityLimitsFromConfig simply is not read for it).
+--   30 (16.8) THREE THINGS. (a) PPCMassMin 120 -> 255 (a 50 mm PPC 222 -> 355 kg, 100 mm 845 -> 969, 200 mm 3790 -> 3869, 300 mm 9000 as before; each PPC's heat limit and the heat one shot adds follow its mass, the percents
+--      do not move: tables below). (b) THE 16.7 LIMITS SCRIPT IS GONE (see item 29 (d)). (c) THE FUSION ENGINES: a new entity acf_fusion (lua/entities/acf_fusion/) and its tool (acf_fusion_tool.lua). New knobs
+--      FusionModel, FusionTypes (a LIST: the two sizes, each { id, name, mass, scale, hp }), FusionTypeDefault, FusionDrawDefault, FusionDrawMax, FusionHeatScalar, FusionPowerSmoothing, FusionMaxDeltaTime,
+--      FusionThinkInterval, FusionOutputInterval, FusionToolCapSize, FusionArmourAtOne, FusionHealthMult, FusionMaxPerPlayer (40: the server variable sbox_maxacf_fusions), the link class acf_fusion = "fusion" in
+--      LinkClasses, and the helpers FusionNumber, GetFusionTypes, ClampFusionType, GetFusionType, GetFusionRate, GetFusionReadout. Every fusion knob is OPTIONAL (the file has defaults for all of them).
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -81,7 +88,7 @@
 -- YOUR OWN VALUES: this copy carries them, so it can replace your file as it is. Every such line is marked [YOUR VALUE, shipped N]:
 --   HeatCoolHotBoost 1.3 (shipped 1)   HeatLazerSmall 10 (shipped 5)   HeatLazerBig 30 (shipped 5)
 --   HeatLazerCapF 900 (shipped 1100)   HeatExplodeChance 0.8 (shipped 0.5)   HeatMaxDeltaTime 0.25 (shipped 0.5)
--- Everything else is the shipped 16.7 value (RadFlushKJPerLiter 125000 is the shipped one; the five player limits are 40: capacitor, generator, radiator, lazer and PPC). 16.7 changed: PPCPropDamageScalar 20 (was 1: 20 times the ACF damage at the SAME blast radius, which PPCBlastScalar sets), PPCHeatPerDamage 30000 (was 1000000: 20 x 30000 = 0.6 x the 16.6 blast heat), PPCMassMin 120 (was 60: a 50 mm PPC weighs 222 kg, was 163), and the new EntityLimitsFromConfig (true) that makes lua/autorun/server/acf_lazers_limits.lua set the five entity limits to their knobs at every start. 16.6 changed: the smallest PPC is 50 mm (PPCCaliberMin 50; the new PPCCurveStart 20 keeps every number at 50 mm and above where it was); the PPC blast now heats only the parts it DAMAGES, in proportion to the damage (the new PPCHeatPerDamage 1000000 and PPCHeatMaxPct 300 replace PPCHeatScalar and PPCHeatRadiusMult); the new HeatCheck... knobs belong to the Heat Checker tool (HeatCheckInterval, the lazers' own overheat check, is not one of them and is still 0.1). 16.5: PPCHeatPctSmall 67.8 and PPCHeatPctBig 100 (100 mm = 77%, 300 mm = 100% of the PPC's own limit per shot); 16.2: PPCEnergySmall 500 and PPCEnergyBig 200000, the PPCHeat... knobs (the PPC heats itself), the PPCFire... knobs (its fire sound) and HeatIgniteClasses holds acf_ppc).
+-- Everything else is the shipped 16.8 value (RadFlushKJPerLiter 125000 is the shipped one; the six player limits are 40: capacitor, generator, radiator, lazer, PPC and fusion engine). 16.8 changed: PPCMassMin 255 (was 120: a 50 mm PPC weighs 355 kg, was 222), the EntityLimitsFromConfig knob of 16.7 is gone (nothing sets the limits from the config any more: your server settings do), and the new fusion engines (the Fusion... knobs, FusionTypes with the two sizes, the acf_fusion link class and the Fusion helpers). 16.7 changed: PPCPropDamageScalar 20 (was 1: 20 times the ACF damage at the SAME blast radius, which PPCBlastScalar sets) and PPCHeatPerDamage 30000 (was 1000000: 20 x 30000 = 0.6 x the 16.6 blast heat). 16.6 changed: the smallest PPC is 50 mm (PPCCaliberMin 50; the new PPCCurveStart 20 keeps every number at 50 mm and above where it was); the PPC blast now heats only the parts it DAMAGES, in proportion to the damage (the new PPCHeatPerDamage and PPCHeatMaxPct 300 replace PPCHeatScalar and PPCHeatRadiusMult); the new HeatCheck... knobs belong to the Heat Checker tool (HeatCheckInterval, the lazers' own overheat check, is not one of them and is still 0.1). 16.5: PPCHeatPctSmall 67.8 and PPCHeatPctBig 100 (100 mm = 77%, 300 mm = 100% of the PPC's own limit per shot); 16.2: PPCEnergySmall 500 and PPCEnergyBig 200000, the PPCHeat... knobs (the PPC heats itself), the PPCFire... knobs (its fire sound) and HeatIgniteClasses holds acf_ppc).
 -- =========================================================================
 
 if SERVER then AddCSLuaFile() end
@@ -297,10 +304,6 @@ table.Merge(ACFLazers.Config, {
     LazerMaxPerPlayer   = 40,       -- [CHANGED 19] (15.7) default for the server variable sbox_maxacf_lazers: how many lazers one player may have. All five entities have such a knob (the PPC's is PPCMaxPerPlayer) and all are 40.
                                     --   It is only the DEFAULT: CreateConVar does nothing when the variable already exists (the wiki says it returns the existing one unchanged), so a value it already has wins over
                                     --   this number. Change it in the console:  sbox_maxacf_lazers 60  (a negative number = no limit, GMod's own convention [GUESS]). In single player GMod never checks limits (the wiki)
-    EntityLimitsFromConfig = true,  -- [CHANGED 29] (16.7) true: at every server start the five variables (sbox_maxacf_lazers / _capacitors / _generators / _radiators / _ppcs) are SET to LazerMaxPerPlayer, CapMaxPerPlayer,
-                                    --   GenMaxPerPlayer, RadMaxPerPlayer and PPCMaxPerPlayer (all 40), so a number the game SAVED from an older session (the variables are archived) can no longer win over the knob. A number you
-                                    --   type in the console then lasts until the next start; change the knob to change it for good. false: the knobs are only the DEFAULT of a variable that does not exist yet (15.7). The file doing
-                                    --   this is lua/autorun/server/acf_lazers_limits.lua; it says in the server console which variable it changed. Optional: a config without the line behaves as true
 
     -- ===================== SMALL-LAZER BOOST (damage to PROPS only; people are not affected) =====================
     -- Small lazers hit props SmallBoostMult times harder (2 = double). The boost is full at SmallBoostFullMM and below, then slides in a straight line
@@ -404,6 +407,31 @@ table.Merge(ACFLazers.Config, {
     GenArmourAtOne     = 40,    -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod)
     GenHealthMult      = 1,     -- multiplier on the health ACF works out from the surface area
     GenMaxPerPlayer    = 40,    -- [CHANGED 19] (15.7: was 10) default for the server variable sbox_maxacf_generators
+
+    -- ===================== FUSION ENGINES ===================== [CHANGED 30] (16.8)
+    -- WHAT IT IS. A self-powered energy source: nothing to link to it but capacitors. It is linked to capacitors with the link tools exactly like a generator hub (right-click the fusion engine, then the
+    -- capacitor), and it makes kJ every moment and shares them out into the free room of the whole capacitor group (the generator's water-fill). A capacitor with AllowCharge off takes nothing, and a full
+    -- group stops it. Two sizes, picked with the Fusion tool. Their power is written as the hp of a GENERATOR that would make the same energy:
+    --     kJ per second = hp x GenKJPerHP (5.2) x the health efficiency (1 at full health down to GenDamagedEfficiency at 0%) x the Draw input
+    -- so the large engine (6500 hp) makes 33,800 kJ/s and the small one (250 hp) 1,300 kJ/s, and changing GenKJPerHP changes the fusion engines with the generators. A 60-unit capacitor (203,575 kJ)
+    -- fills in 6.0 s from the large one and in 157 s from the small one.
+    FusionModel         = "models/lasers/fusion.mdl", -- the model. If the file is missing the fusion engine refuses to spawn and says so. Both sizes use it, scaled
+    FusionTypes         = {   -- the sizes, in the order the tool lists them: id (what a dupe and the tool store), name (hover text, undo list), mass (kg), scale (the model's scale), hp (the generator-equivalent power)
+        { id = "large", name = "Large Fusion Engine", mass = 10000, scale = 1,    hp = 6500 },
+        { id = "small", name = "Small Fusion Engine", mass = 1500,  scale = 0.25, hp = 250 },
+    },
+    FusionTypeDefault   = "large",  -- the size the tool starts with, and what a dupe or a console command with an unknown size becomes
+    FusionDrawDefault   = 100,      -- what the Draw input counts as while nothing is wired to it (100 = make everything it can, like AllowCharge counting as on)
+    FusionDrawMax       = 100,      -- the Draw input value that means "all" (the wire value is clamped to 0 .. this)
+    FusionHeatScalar    = 0,        -- kJ of heat the engine gets per kJ it makes. 0 = it makes no heat (the shipped value: not asked for). 1 = like a generator hub (HeatGenSmall / HeatGenBig are 1). It holds heat like any part
+    FusionPowerSmoothing = 0.4,     -- seconds. Time constant of the smoothing of the energy reading (wire output, hover text)
+    FusionMaxDeltaTime  = 0.25,     -- seconds. Longest "time since the last pass" it will make energy for (a lag spike cannot hand out a huge pile at once)
+    FusionThinkInterval = 0.1,      -- seconds between its passes
+    FusionOutputInterval = 0.25,    -- seconds between refreshes of the wire outputs and the hover text
+    FusionToolCapSize   = 60,       -- the fusion tool quotes "fills a capacitor this big in N seconds" for this capacitor size (a display number only: changes nothing in the game)
+    FusionArmourAtOne   = 40,       -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod): 10 mm for the small one
+    FusionHealthMult    = 1,        -- multiplier on the health ACF works out from the surface area
+    FusionMaxPerPlayer  = 40,       -- default for the server variable sbox_maxacf_fusions (how many fusion engines one player may have). Like the other four it is only a DEFAULT: set the variable on the server
 
     -- ===================== HEAT (the heat core. The radiator block follows it) ===================== [CHANGED 1]
     -- WHAT IT IS. Any entity can hold heat. Heat is kept as kJ ABOVE room temperature, and an entity's heat CAPACITY is its mass: kJ per kelvin = mass (kg) x HeatSpecificHeat.
@@ -620,10 +648,10 @@ table.Merge(ACFLazers.Config, {
     -- Every PPC knob is OPTIONAL: a config without one uses the number written here (the in-code defaults sit in the PPC helpers below, and a test keeps them equal to this block).
     --
     --   caliber   scale  mass(kg)  kJ per shot   HE kg   blast radius   muzzle velocity
-    --      20      0.20     120          500      0.063       126 u (3.2 m)    600 m/s
-    --      50      0.50     222         6181      0.773       289 u (7.3 m)    621 m/s
-    --     100      1.00     845        16452      2.057       400 u (10.1 m)   657 m/s
-    --     200      2.00    3790        49839      6.230       576 u (14.6 m)   729 m/s
+    --      20      0.20     255          500      0.063       126 u (3.2 m)    600 m/s
+    --      50      0.50     355         6181      0.773       289 u (7.3 m)    621 m/s
+    --     100      1.00     969        16452      2.057       400 u (10.1 m)   657 m/s
+    --     200      2.00    3869        49839      6.230       576 u (14.6 m)   729 m/s
     --     300      3.00    9000       200000     25.000       911 u (23.1 m)   800 m/s
     -- [CHANGED 28] (16.6) The smallest PPC is 50 mm now (PPCCaliberMin). The 20 mm row is where the size curves START (PPCCurveStart): the "Small" knobs below describe that size, and nothing is built at it.
     PPCModel          = "models/lasers/ppc.mdl", -- the PPC. If the file is missing a PPC refuses to spawn and says so. Its muzzle is 63 units in front of its origin at scale 1 (the same end the lazer's beam starts at: the front of the model)
@@ -633,7 +661,7 @@ table.Merge(ACFLazers.Config, {
     --                               exactly as before the minimum went up, so no PPC of 50 mm or more changed. Nothing is built at this size any more. Set it equal to PPCCaliberMin and the Small knobs describe the smallest PPC again (then re-tune them)
     PPCCaliberBase    = 100,    -- the model is its normal size (scale 1.0) at this caliber: scale = caliber / PPCCaliberBase. 100 = the same rate as the lazer's model, as asked. [GUESS] the model's own barrel looks like about an 85 mm one at scale 1; set 85 for a model that matches its caliber exactly
     -- Body: mass (the lazer's curve: PPCMassMin at the smallest, PPCMassMax at the biggest, bent by the exponent), and the ACF armour / health multipliers (the lazer's numbers).
-    PPCMassMin        = 120,    -- [CHANGED 29] (16.7: was 60) kg at PPCCurveStart (20 mm; nothing is built at it). The smallest PPC you can build (50 mm) is 222 kg now (16.6: 163), 100 mm 845 (790), 200 mm 3790 (3755), 300 mm 9000
+    PPCMassMin        = 255,    -- [CHANGED 30] (16.8: was 120; 16.7: was 60) kg at PPCCurveStart (20 mm; nothing is built at it). The smallest PPC you can build (50 mm) is 355 kg now (16.7: 222, 16.6: 163), 100 mm 969 (845, 790), 200 mm 3869 (3790, 3755), 300 mm 9000. An exact doubling of the 16.6 50 mm PPC (326 kg) would be 225
     PPCMassMax        = 9000,   -- kg at PPCCaliberMax
     PPCMassExponent   = 2,      -- bends the mass curve (bigger = small PPCs stay light for longer)
     PPCArmourMult     = 0.5,    -- multiplier on the armour ACF would give (caliber x ACF.ArmorMod): half, like the lazer
@@ -703,10 +731,10 @@ table.Merge(ACFLazers.Config, {
     -- damage law takes 41% .. 422% of its max health per second (below): a PPC has to cool between shots (about 200 s at 100 mm with nothing cooling it) and a radiator is what makes it fire again.
     -- With the shipped numbers (shots 1 s apart, nothing cooling):
     --   caliber   mass (kg)   limit (kJ)   % of its limit per shot   heat per shot (kJ)   after two shots   damage at the second shot (% of max health per second)
-    --      20         120         27473             67.8%                    18626                135%                  41%
-    --      50         222         50824             71.25%                   36212                142%                  56%
-    --     100         845        193453             77%                     148959                153%                  89%
-    --     200        3790        867678             88.5%                   767895                176%                 203%
+    --      20         255         58379             67.8%                    39581                135%                  41%
+    --      50         355         81273             71.25%                   57907                142%                  56%
+    --     100         969        221842             77%                     170818                153%                  89%
+    --     200        3869        885765             88.5%                   783902                176%                 203%
     --     300        9000       2060450            100%                    2060450                199%                 422%
     PPCHeatPctSmall   = 67.8,   -- [CHANGED 27] (16.5: was 77) percent of its own limit (PPCHeatCapF) that ONE shot at PPCCurveStart (20 mm) adds to its heat: 100 = one shot takes it to its limit, 51 was the 100 mm value in 16.2. 0 = a PPC never heats itself
     PPCHeatPctBig     = 100,    -- [CHANGED 27] (16.5: was 77) ... and of the biggest (PPCCaliberMax), a straight line between (like HeatLazerSmall .. HeatLazerBig). The line through (100 mm, 77%) and (300 mm, 100%) gives 67.8 at 20 mm
@@ -731,7 +759,7 @@ table.Merge(ACFLazers.Config, {
     -- ===================== LINKING TOOLS =====================
     -- The things the link tools (right-click / shift / reload on the lazer, capacitor and generator tools) can select and link. ACF's own link system decides which PAIRS work:
     --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor, PPC <-> capacitor, radiator <-> radiator (a pool).
-    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine", acf_radiator = "radiator", acf_ppc = "PPC" }, -- class -> the word used in chat messages [CHANGED 6] [CHANGED 22]
+    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine", acf_radiator = "radiator", acf_ppc = "PPC", acf_fusion = "fusion" }, -- class -> the word used in chat messages [CHANGED 6] [CHANGED 22] [CHANGED 30]
 
     -- ===================== WOBBLE: A DAMAGED LAZER LOSES ITS AIM =====================
     -- The lower a lazer's health, the more its beam drifts away from where it points. The drift is SMOOTH (it slowly wanders around, it never
@@ -1312,7 +1340,7 @@ end
 
 local PPCNumberDefaults = {
     PPCCaliberMin = 50, PPCCurveStart = 20, PPCCaliberMax = 300, PPCCaliberBase = 100,
-    PPCMassMin = 120, PPCMassMax = 9000, PPCMassExponent = 2, PPCArmourMult = 0.5, PPCHealthMult = 1,
+    PPCMassMin = 255, PPCMassMax = 9000, PPCMassExponent = 2, PPCArmourMult = 0.5, PPCHealthMult = 1,
     PPCEnergySmall = 500, PPCEnergyBig = 200000, PPCEnergyCurve = 0.75,
     PPCSpeedSmall = 600, PPCSpeedBig = 800, PPCLifetime = 7, PPCDamageAtEnd = 0.8, PPCBallDiameter = 10, PPCBallModelDiameter = 3,
     PPCBlastScalar = 1, PPCPropDamageScalar = 20, PPCFragmentScalar = 0, PPCFragMassRatio = 0.5, PPCBlastBackoff = 4, PPCHeatPerDamage = 30000, PPCHeatMaxPct = 300,
@@ -2159,6 +2187,132 @@ function ACFLazers.GetGenReadout(hp)
         rateDamaged        = rateHurt,                               -- kJ/s with no health left
         efficiencyDamaged  = effHurt,
         capSize            = C.GenToolCapSize,
+        capacity           = capacity,                               -- kJ the reference capacitor holds
+        fillSeconds        = capacity / math.max(rate, 1e-6),        -- at full health
+        fillSecondsDamaged = capacity / math.max(rateHurt, 1e-6),
+    }
+end
+
+-- ===================== FUSION ENGINE HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 30]
+
+-- The numbers a config without the fusion lines uses (a test keeps them equal to the knobs written above).
+local FusionNumberDefaults = {
+    FusionDrawDefault = 100, FusionDrawMax = 100, FusionHeatScalar = 0, FusionPowerSmoothing = 0.4, FusionMaxDeltaTime = 0.25, FusionThinkInterval = 0.1,
+    FusionOutputInterval = 0.25, FusionToolCapSize = 60, FusionArmourAtOne = 40, FusionHealthMult = 1, FusionMaxPerPlayer = 40,
+}
+
+local FusionTypesDefault = {
+    { id = "large", name = "Large Fusion Engine", mass = 10000, scale = 1,    hp = 6500 },
+    { id = "small", name = "Small Fusion Engine", mass = 1500,  scale = 0.25, hp = 250 },
+}
+
+ACFLazers.FusionNumberDefaults = FusionNumberDefaults
+ACFLazers.FusionTypesDefault   = FusionTypesDefault
+
+--- A fusion number: the config's, or the default when the config has no real number there.
+function ACFLazers.FusionNumber(name)
+    local v = tonumber(ACFLazers.Config[name])
+
+    if not v or v ~= v or v == math.huge or v == -math.huge then return FusionNumberDefaults[name] end
+
+    return v
+end
+
+--- The model of the fusion engine: the config's text, or the default when the config has none.
+function ACFLazers.GetFusionModel()
+    local v = ACFLazers.Config.FusionModel
+
+    if type(v) == "string" and v ~= "" then return v end
+
+    return "models/lasers/fusion.mdl"
+end
+
+-- A usable size entry: an id (text), and a mass and a scale above 0, and a power of 0 or more, all real numbers.
+local function FusionTypeUsable(t)
+    if type(t) ~= "table" or type(t.id) ~= "string" or t.id == "" then return false end
+
+    for _, key in ipairs({ "mass", "scale", "hp" }) do
+        local v = tonumber(t[key])
+
+        if not v or v ~= v or v == math.huge or v == -math.huge then return false end
+    end
+
+    return tonumber(t.mass) > 0 and tonumber(t.scale) > 0 and tonumber(t.hp) >= 0
+end
+
+--- The sizes the tool offers, in order: the config's FusionTypes without the unusable entries, or the two built-in sizes when none is usable. Each entry has id, name, mass, scale, hp as real values.
+function ACFLazers.GetFusionTypes()
+    local list = ACFLazers.Config.FusionTypes
+    local out  = {}
+
+    if type(list) == "table" then
+        for _, t in ipairs(list) do
+            if FusionTypeUsable(t) then
+                out[#out + 1] = { id = t.id, name = type(t.name) == "string" and t.name ~= "" and t.name or t.id, mass = tonumber(t.mass), scale = tonumber(t.scale), hp = tonumber(t.hp) }
+            end
+        end
+    end
+
+    if #out == 0 then return FusionTypesDefault end
+
+    return out
+end
+
+--- A size id coming from the tool, a dupe or a console command, made safe: itself when it is one of the sizes, else FusionTypeDefault when that is one, else the first size.
+function ACFLazers.ClampFusionType(id)
+    local list = ACFLazers.GetFusionTypes()
+
+    for _, t in ipairs(list) do
+        if t.id == id then return t.id end
+    end
+
+    local default = ACFLazers.Config.FusionTypeDefault
+
+    for _, t in ipairs(list) do
+        if t.id == default then return t.id end
+    end
+
+    return list[1].id
+end
+
+--- The entry of a size (after ClampFusionType, so it always exists).
+function ACFLazers.GetFusionType(id)
+    id = ACFLazers.ClampFusionType(id)
+
+    for _, t in ipairs(ACFLazers.GetFusionTypes()) do
+        if t.id == id then return t end
+    end
+end
+
+--- kJ per second a fusion engine makes: the hp of its size x GenKJPerHP x the health efficiency (GetGenEfficiency: 1 at full health, GenDamagedEfficiency at none) x draw (0..1, the Draw input as a share).
+function ACFLazers.GetFusionRate(id, health, draw)
+    draw = ACFLazers.ClampNumber(draw, 1, 0, 1)
+
+    return ACFLazers.GetFusionType(id).hp * ACFLazers.Config.GenKJPerHP * ACFLazers.GetGenEfficiency(health) * draw
+end
+
+--- Everything the fusion tool shows for a size: the energy per second the engine makes at full health and with no health left, and how long that takes to fill the reference capacitor (FusionToolCapSize).
+--- Plain numbers, so the tool's panel, the toolgun screen and the tests all read the same thing.
+function ACFLazers.GetFusionReadout(id)
+    local C    = ACFLazers.Config
+    local t    = ACFLazers.GetFusionType(id)
+    local size = ACFLazers.FusionNumber("FusionToolCapSize")
+
+    local rate     = ACFLazers.GetFusionRate(t.id, 1, 1)
+    local rateHurt = ACFLazers.GetFusionRate(t.id, 0, 1)
+    local capacity = ACFLazers.GetCapCapacity(size)
+
+    return {
+        id                 = t.id,
+        name               = t.name,
+        hp                 = t.hp,
+        scale              = t.scale,
+        mass               = t.mass,
+        kjPerHP            = C.GenKJPerHP,
+        rate               = rate,                                   -- kJ/s at full health
+        rateDamaged        = rateHurt,                               -- kJ/s with no health left
+        efficiencyDamaged  = ACFLazers.GetGenEfficiency(0),
+        capSize            = size,
         capacity           = capacity,                               -- kJ the reference capacitor holds
         fillSeconds        = capacity / math.max(rate, 1e-6),        -- at full health
         fillSecondsDamaged = capacity / math.max(rateHurt, 1e-6),
