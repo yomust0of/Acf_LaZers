@@ -26,6 +26,11 @@
 -- 19: THE BALL'S COLOUR. A PPC keeps three whole numbers BallR / BallG / BallB (0..255, from the tool's colour picker, clamped here; a missing one is the config's cyan) and tells the clients the colour as the
 --   networked vector FlightColor, next to FlightMaterial; the client hook in lazers_ppc.lua tints the flying ball with it (always fully opaque). The three names are in the duplicator list, so a copy keeps the colour.
 --   The ball's SIZE and material come from the config as before (NetworkBolt asks GetPPCBallScale and PPCBallMaterial). The version is 19.
+-- 21: THE FIRE SOUND. The burst layer is beams/beamstart5.wav (config PPCFireSound); PlayFireSound multiplies both layers' volume by ACFLazers.GetPPCFireVolumeMult(caliber) (PPCFireVolumeSmallMult 0.6 at the
+--   smallest PPC, 1 at the biggest); the pitch follows the caliber as before. The version is 21.
+-- 20: THE SELF-DAMAGE IS 4 TIMES SLOWER, AND FAST ONLY AFTER FIRING WHILE OVER THE LIMIT. TakeHeatDamage multiplies the loss by ACFLazers.GetPPCSelfDamageMult(now, OverfireUntil): PPCHeatDamageMult (0.25) normally,
+--   PPCHeatOverfireMult (1) while CurTime() is before OverfireUntil. AddShotHeat sets OverfireUntil (ACFLazers.GetPPCOverfireUntil) when a shot is released while the heat is ALREADY over 100% (read before the shot's own
+--   heat is added): now + PPCHeatOverfireSeconds (5), restarted by every such shot. The hover text says "Overheated: taking damage" and, while the fast rate is on, adds FAST. Not saved by the duplicator.
 -- Not in yet (asked for later): the effects (sparks, energy round the projectile), RECOIL (the same maths ACF's cannons use, parented and unparented), pushing the parent chain of a prop that is hit,
 --   penetrating light props (explode on the heaviest instead), the explosion's own sound and effects.
 -- =========================================================================
@@ -48,7 +53,7 @@ if not LASER_CONFIG then
 end
 
 -- This file needs the config of the SAME batch (the PPC helpers are new in 16). With an older config every shot would throw; say it once, clearly.
-if not (ACFLazers.GetPPCShotEnergy and ACFLazers.PPCNumber and ACFLazers.GetPPCSpeed and ACFLazers.ClampPPCCaliber and ACFLazers.IsProtectedBySafezone and ACFLazers.DescribeSafezone and ACFLazers.GetPPCDamageHeat and ACFLazers.GetPPCBallColor) then
+if not (ACFLazers.GetPPCShotEnergy and ACFLazers.PPCNumber and ACFLazers.GetPPCSpeed and ACFLazers.ClampPPCCaliber and ACFLazers.IsProtectedBySafezone and ACFLazers.DescribeSafezone and ACFLazers.GetPPCDamageHeat and ACFLazers.GetPPCBallColor and ACFLazers.GetPPCSelfDamageMult and ACFLazers.GetPPCOverfireUntil and ACFLazers.GetPPCFireVolumeMult) then
     ErrorNoHalt("[acf_ppc] the PPC helpers are missing: lua/autorun/acf_lazers_config.lua is older than this init.lua. Copy the new config as well, then restart.\n")
     return
 end
@@ -61,7 +66,7 @@ end
 
 local Heat = ACFLazers.Heat
 
-local VERSION = "19"
+local VERSION = "21"
 MsgN("[acf_ppc] init.lua version " .. VERSION .. " loaded")
 
 local IDLE_THINK = 0.2   -- seconds between Thinks while nobody holds Fire, the PPC is not cooling and it holds no heat
@@ -105,6 +110,7 @@ function ENT:Initialize()
     self.NextHeatRead   = 0     -- CurTime() of the next heat-readout refresh (HeatReadout)
     self.HeatShown      = true  -- true until the readout has written the COLD state (the first refresh writes 0 kJ / room temperature / 0%, like the lazer's)
     self.LastShotTime   = -1e9  -- CurTime() of the last shot that was released (the explosion dice use it)
+    self.OverfireUntil  = -1e9  -- 20: CurTime() until which the self-damage is fast (a shot was released while it was over its limit)
 
     if WireLib then
         WireLib.CreateInputs(self, { "Fire" })
@@ -427,7 +433,8 @@ end
 
 -- A shot was released and paid: it heats the PPC. The readout is refreshed on the next Think, and the PPC keeps thinking fast while it holds heat.
 function ENT:AddShotHeat(now)
-    self.LastShotTime = now
+    self.LastShotTime  = now
+    self.OverfireUntil = ACFLazers.GetPPCOverfireUntil(now, self:GetHeatPct(), self.OverfireUntil) -- 20: read BEFORE this shot's heat is added
 
     local heat = self:GetShotHeat()
 
@@ -464,7 +471,7 @@ function ENT:TakeHeatDamage(over, dt)
 
     if not (acf and acf.MaxHealth and acf.MaxHealth > 0) then return end
 
-    local pctPerSecond = ACFLazers.GetHeatDamagePct(over, ACFLazers.PPCNumber("PPCHeatDamage"))
+    local pctPerSecond = ACFLazers.GetHeatDamagePct(over, ACFLazers.PPCNumber("PPCHeatDamage")) * ACFLazers.GetPPCSelfDamageMult(CurTime(), self.OverfireUntil) -- 20: x 0.25, or x 1 after a shot fired over the limit
     local HitRes       = Heat.Hurt(self, acf.MaxHealth * pctPerSecond / 100 * dt)
 
     if HitRes and HitRes.Kill then self:HeatDeath() end
@@ -503,14 +510,15 @@ function ENT:PlayFireSound()
     local level = ACFLazers.PPCNumber("PPCFireSoundLevel")
 
     local burst = ACFLazers.PickPPCSound("PPCFireSound")
+    local mult  = ACFLazers.GetPPCFireVolumeMult(self:GetCaliber()) -- 21: a small PPC is quieter (both layers), a big one is at full volume
 
     pitch = math.Round(pitch) -- (the engine takes whole percents)
 
-    if burst then self:EmitSound(burst, level, pitch, math.Clamp(ACFLazers.PPCNumber("PPCFireVolume"), 0, 1), CHAN_AUTO) end
+    if burst then self:EmitSound(burst, level, pitch, math.Clamp(ACFLazers.PPCNumber("PPCFireVolume") * mult, 0, 1), CHAN_AUTO) end
 
     local crackle = ACFLazers.PickPPCSound("PPCFireSound2")
 
-    if crackle then self:EmitSound(crackle, level, pitch, math.Clamp(ACFLazers.PPCNumber("PPCFireVolume2"), 0, 1), CHAN_AUTO) end
+    if crackle then self:EmitSound(crackle, level, pitch, math.Clamp(ACFLazers.PPCNumber("PPCFireVolume2") * mult, 0, 1), CHAN_AUTO) end
 end
 
 -- Release one projectile. Returns true if ACF made it, false if ACF had no free bullet slot (the 2000 of ACF.Ballistics): then nothing is paid.
@@ -669,7 +677,11 @@ function ENT:ACF_UpdateOverlayState(State)
     State:AddKeyValue("Heat per shot", string.format("%.0f kJ (%.0f%% of its limit)", info.heat, info.heatPct))
 
     if heatPct > 1 then
-        State:AddError("Overheated: taking damage")
+        if CurTime() < self.OverfireUntil then
+            State:AddError("Overheated: taking damage FAST (it fired while over its limit)")
+        else
+            State:AddError("Overheated: taking damage")
+        end
     end
 
     State:AddKeyValue("Muzzle velocity", string.format("%.0f m/s", info.speed))

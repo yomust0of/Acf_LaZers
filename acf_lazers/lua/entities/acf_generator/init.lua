@@ -50,7 +50,7 @@ end
 
 local Heat = ACFLazers.Heat
 
-local VERSION = "15" -- [CHANGED 1]
+local VERSION = "21" -- [CHANGED 1] (21: the hum)
 MsgN("[acf_generator] init.lua version " .. VERSION .. " loaded")
 
 -- How many generators one player may own (GMod reads a server variable called sbox_max<name>; CreateConVar does nothing if it already exists).
@@ -131,6 +131,7 @@ function ENT:Initialize()
     self.NextOutput     = 0
     self.OverlaySig     = ""
     self.Exploding      = false
+    self.HumSnd         = nil     -- 21: the hum (a looping sound patch), made when the hub starts taking power
 
     if WireLib then
         WireLib.CreateInputs(self, { "Draw" })
@@ -511,6 +512,7 @@ function ENT:Run(now, dt)
         self.NextOutput = now + CFG.GenOutputInterval
         self:UpdateWireOutputs()
         self:RefreshOverlay()
+        self:SafeUpdateHum() -- 21
     end
 end
 
@@ -616,6 +618,71 @@ function ENT:RefreshOverlay()
     if signature ~= self.OverlaySig then
         self.OverlaySig = signature
         self:UpdateOverlay()
+    end
+end
+
+-- ===================== HUM (21) =====================
+
+-- Stops the hum for good (nothing is left playing).
+function ENT:StopHum()
+    if self.HumSnd then
+        self.HumSnd:Stop()
+        self.HumSnd = nil
+    end
+end
+
+-- The hum follows the rating and the load (ACFLazers.GetGenHum: hp taken / rated hp): silent when the hub takes nothing, otherwise a looping sound patch made once (its sound level has to be set BEFORE it
+-- starts playing) whose volume and pitch glide to the new numbers over one output interval. It is made again when the sound file or the level (a resize) changes.
+-- [GUESS] that CreateSound loops this file by itself, as for the fusion engine's hum.
+function ENT:UpdateHum()
+    if not ACFLazers.GetGenHum then return end -- (a config older than 21: no hum)
+
+    local load = self.RatedHP > 0 and self.PowerHP / self.RatedHP or 0
+    local hum  = ACFLazers.GetGenHum(self.RatedHP, load)
+    local name = ACFLazers.GetGenHumSound()
+
+    if not hum.on or name == "" then
+        self:StopHum()
+
+        return
+    end
+
+    if self.HumSnd and (self.HumName ~= name or self.HumLevel ~= hum.level) then self:StopHum() end
+
+    local glide = math.max(tonumber(CFG.GenOutputInterval) or 0.25, 0)
+
+    if not self.HumSnd then
+        local snd = CreateSound(self, name)
+
+        if not snd then return end
+
+        snd:SetSoundLevel(hum.level)
+        snd:PlayEx(hum.volume, hum.pitch)
+
+        self.HumSnd, self.HumName, self.HumLevel, self.HumVolume, self.HumPitch = snd, name, hum.level, hum.volume, hum.pitch
+    elseif not self.HumSnd:IsPlaying() then -- (the engine stops a patch now and then, e.g. on a map cleanup)
+        self.HumSnd:PlayEx(hum.volume, hum.pitch)
+        self.HumVolume, self.HumPitch = hum.volume, hum.pitch
+    else
+        if math.abs(hum.volume - self.HumVolume) > 1e-4 then
+            self.HumSnd:ChangeVolume(hum.volume, glide)
+            self.HumVolume = hum.volume
+        end
+
+        if math.abs(hum.pitch - self.HumPitch) > 0.01 then
+            self.HumSnd:ChangePitch(hum.pitch, glide)
+            self.HumPitch = hum.pitch
+        end
+    end
+end
+
+-- A sound that goes wrong must never stop the hub from working (and spam the console only once).
+function ENT:SafeUpdateHum()
+    local ok, err = pcall(self.UpdateHum, self)
+
+    if not ok and not self.HumFailed then
+        self.HumFailed = true
+        ErrorNoHalt("[acf_generator] the hum failed: " .. tostring(err) .. "\n")
     end
 end
 
@@ -729,6 +796,8 @@ function ENT:UnlinkAll()
 end
 
 function ENT:OnRemove()
+    self:StopHum() -- 21
+
     -- Straight table clean-up instead of ACF.PerformClassUnlink: the entity is on its way out and we only need everybody to forget it.
     for Engine in pairs(self.Engines) do
         self:ForgetEngine(Engine)

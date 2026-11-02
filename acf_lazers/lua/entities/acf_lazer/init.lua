@@ -66,6 +66,12 @@ if not (ACFLazers.IsEntityInSafezone and ACFLazers.SafezoneFlags and ACFLazers.S
     return
 end
 
+-- 21: the muzzle hum's volume, pitch and range come from ACFLazers.GetMuzzleSound (new in 21). Without it the hum would throw on the first shot; say so once, clearly.
+if not ACFLazers.GetMuzzleSound then
+    ErrorNoHalt("[acf_lazer] ACFLazers.GetMuzzleSound is missing: lua/autorun/acf_lazers_config.lua is older than this init.lua (21). Copy the new config as well, then restart.\n")
+    return
+end
+
 local Heat = ACFLazers.Heat
 
 -- [CHANGED 10] (15.7) The two knobs of the heat readout are OPTIONAL: a config without them (a 15.4 one) gets these. (15.5 / 15.6 returned from this file when they were missing, and a file that
@@ -76,7 +82,7 @@ local OVERLAY_DELAY_DEFAULT    = 0.25 -- seconds, the hover-text buffer of this 
 ENT.OverlayDelay = math.max(tonumber(LASER_CONFIG.LazerOverlayDelay) or OVERLAY_DELAY_DEFAULT, 0) -- [CHANGED 8] ACF's hover-text buffer for this entity (ACF's own default is 1 s)
 
 -- Which version of this file is running. It is printed to the server console when the file loads, and every notice below carries it.
-local VERSION = "16.1" -- [CHANGED 1] [CHANGED 12]
+local VERSION = "21" -- [CHANGED 1] [CHANGED 12] (21: the muzzle hum scales with the size: ACFLazers.GetMuzzleSound, PlayEx)
 MsgN("[acf_lazer] init.lua version " .. VERSION .. " loaded")
 
 -- [CHANGED 11] (15.7) How many lazers one player may own: GMod reads a server variable called sbox_max<name> (the spawn function below asks ply:CheckLimit("acf_lazers")), and CreateConVar does
@@ -358,20 +364,12 @@ function ENT:SetFiringState(state)
             -- (the burst timer start was here)
 
             if self.LaserSound then
-                -- Lerp(t, a, b) = "a when t is 0, b when t is 1, a straight line in between" [KNOW].
-                -- t = 0 for the smallest lazer ... 1 for the biggest (ACFLazers.GetSizeFraction, config file).
-                local size     = ACFLazers.GetSizeFraction(self:GetCaliber())
-                local loudness = Lerp(size, LASER_CONFIG.MuzzleVolumeSmall, LASER_CONFIG.MuzzleVolumeBig)
-                local pitch    = math.Clamp(Lerp(size, LASER_CONFIG.MuzzlePitchSmall, LASER_CONFIG.MuzzlePitchBig), 0, 255) -- the engine's pitch ends at 255
+                -- [21] The hum's numbers come from the config (ACFLazers.GetMuzzleSound: the volume, the pitch and the range for this caliber, a straight line between the Small and the Big knobs). The sound
+                -- starts WITH them (PlayEx): 16.1 to 20 started it at the patch's own volume and pitch with Play and changed both a moment later with a glide of 0, which is the part that did not scale.
+                local hum = ACFLazers.GetMuzzleSound(self:GetCaliber())
 
-                -- The engine's volume stops at 1. Loudness above 1 becomes extra SOUND LEVEL instead: every doubling = MuzzleDbPerDoubling more decibels,
-                -- which makes the hum carry farther. (Natural log divided by log 2 = "how many doublings", because Lua's math.log only has the natural one.)
-                local doublings = loudness > 1 and math.log(loudness) / math.log(2) or 0
-
-                self.LaserSound:SetSoundLevel(LASER_CONFIG.MuzzleSoundLevel + LASER_CONFIG.MuzzleDbPerDoubling * doublings) -- set BEFORE Play: [GUESS] it only applies to a sound that starts afterwards
-                self.LaserSound:Play()
-                self.LaserSound:ChangeVolume(math.min(loudness, 1), 0)
-                self.LaserSound:ChangePitch(pitch, 0)
+                self.LaserSound:SetSoundLevel(hum.level) -- set BEFORE the sound starts: [GUESS] it only applies to a sound that starts afterwards
+                self.LaserSound:PlayEx(hum.volume, hum.pitch)
             end
         else
             -- The "burst just ended, maybe lock the lazer out" rule was here and is gone: energy decides now.

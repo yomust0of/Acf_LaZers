@@ -114,6 +114,36 @@
 --      alpha) and a PPC takes its colour from the tool when you spawn it or left-click it. New helper GetPPCBallColor (clamps three numbers to whole 0..255, junk becomes the knob). (c) The size: new knobs PPCBallSizeSmall 0.5
 --      and PPCBallSizeBig 3, a straight line over the caliber (50 mm half, 300 mm three times, 100 mm exactly 1), multiplied with the size the ball already had (GetPPCBallMult includes it; GetPPCBallScale is unchanged).
 --      The balls are 2.5 / 10.4 / 24.3 / 44.8 / 72.5 / 108 units across at 50 / 100 / 150 / 200 / 250 / 300 mm (18: 5 / 10.4 / 16.2 / 22.4 / 29 / 36; the sizes written in the 16.9 comment of PPCBallBigMult, 15.9 and 21.6 for 150 and 200 mm, were wrong and are corrected there).
+--   35 (20) THE PPC BLAST ON ITS OWN DAMAGE MODEL, PPC SELF-DAMAGE 4 TIMES SLOWER, FUSION MASS ON THE OUTPUT. (a) New flag PPCOwnDamage (on). ACF still decides WHO the blast reaches (line of sight, what blocks what,
+--      permissions, safezones, the shooter's own contraption), but the damage a part takes is no longer ACF's  area x (penetration / armour)^2.  It is  (the part's area / 264.7) x S x F(x) x A x the shot's age factor, in
+--      MULTIPLES OF THE PART'S OWN BASE HEALTH:  S = PPCBlastHealthSmall .. PPCBlastHealthBig (2.2 at 50 mm .. 4.4 at 300 mm, a straight line over the caliber);  x = distance from the blast / the blast radius;
+--      F(x) = the new FALLOFF (b);  A = the ARMOUR FACTOR (1 - PPCArmourInfluence) + PPCArmourInfluence x (min(1, penetration / armour))^2  (PPCArmourInfluence 0.25: armour moves the damage by 25% at most; 0 = armour is
+--      ignored, 1 = ACF's own armour law). A 20 mm part at 10% of the radius of a 100 mm shot takes what 19 gave it (about 16 points for a 3000 cm2 part); a thin part far out takes less than in 19, a heavily armoured part
+--      much more. People (ACF "Squishy") and PPCOwnDamage off still take the 19 model (PPCPropDamageScalar x ACF's damage). The heat a part gets is still its damage x PPCHeatPerDamage. (b) THE FALLOFF IS AN INVERSE
+--      EXPONENTIAL: F(x) = (e^(-rate x) - e^(-rate)) / (1 - e^(-rate)), rate PPCFalloffRate 3, blended with the straight line 1 - x by PPCFalloffBlend (1 = fully curved). It is 1 at the centre, 0 at the edge, and drops
+--      fastest next to the blast and flattens out towards the edge (ACF's own is 1 - sqrt(x)):
+--           x (share of the radius)     5%    10%    25%    50%    75%    90%
+--           F(x), rate 3              0.85   0.73   0.44   0.18   0.06   0.02
+--           ACF's 1 - sqrt(x)         0.78   0.68   0.50   0.29   0.13   0.05
+--           100 mm shot, S 2.64       2.25   1.92   1.17   0.48   0.15   0.05   (damage in multiples of the part's base health, armour factor 1)
+--           300 mm shot, S 4.4        3.76   3.20   1.96   0.80   0.26   0.08   (a part with more armour than the blast penetration: times 0.75)
+--      (c) PPC SELF-DAMAGE IS 4 TIMES SLOWER: PPCHeatDamageMult 0.25 multiplies the whole self-damage law (the over^2 part and the turbo part). It goes back to the old speed (PPCHeatOverfireMult 1) for PPCHeatOverfireSeconds
+--      (5) after a shot that was RELEASED WHILE THE PPC WAS ALREADY OVER 100% of its heat limit (each such shot restarts the 5 seconds). A PPC that merely sits over its limit, or whose shot took it over, loses health at the
+--      slow rate. New helpers GetPPCThreshold, GetPPCBlastHealth, GetPPCBlastFalloff, GetPPCArmourFactor, GetPPCBlastDamage, GetPPCOverfireUntil, GetPPCSelfDamageMult; the PPC ammo hook (lazers_ppc.lua), the PPC (acf_ppc,
+--      version 20) and the blast toy use them. (d) FUSION MASS IS ON THE OUTPUT: GetFusionMass runs on the straight slider (GetFusionSlider: FusionMassSmall at FusionHPMin .. FusionMassBig at FusionHPMax), no longer on the
+--      curved size fraction, so mass follows the rated power and not the volume of the model; the model scale still runs on the size curve. (e) FusionSizeCurve 1 -> 0.75: the model size is three quarters inverse
+--      exponential, one quarter straight line (the rate stays 8).
+--   36 (21) THE SOUNDS. (a) FUSION ENGINE: FusionHumSound is "ambient/machines/refrigerator.wav" (was ambient/machines/power_transformer_loop_1.wav). Its pitch, volume and range already followed the size
+--      (FusionHumPitchSmall 125 .. Big 70: a bigger engine hums deeper) and the operating percent; only the file changed. [GUESS] that the file loops by itself; if it does not, the hum restarts every pass (a short gap).
+--      (b) PPC: the burst layer of the fire sound, PPCFireSound, is "beams/beamstart5.wav" (was ambient/energy/whiteflash.wav); the crackle layer PPCFireSound2 is as it was (set it to "" to drop it). The pitch
+--      follows the caliber as before (PPCFirePitchSmall 125 .. Big 75) and NEW the volume does too: both layers are PPCFireVolumeSmallMult (0.6) of their volume at PPCCurveStart (20 mm; the smallest PPC you can build, 50 mm, is at 0.64), a straight line up to full at the
+--      biggest, 300 mm (ACFLazers.GetPPCFireVolumeMult). (c) GENERATOR: a NEW hum, "ambient/grinder/grinderloop_01.wav" (GenHumSound), while the hub is taking power from its engines. Its size is the model's own
+--      size curve (GetGenScale between GenHPMin and GenHPMax, so 350 hp is a third of the way): the volume runs GenHumVolumeSmall .. Big, the pitch GenHumPitchSmall .. Big (bigger = deeper), the range
+--      GenHumLevelSmall .. Big. The LOAD (hp taken / rated hp) scales the volume from GenHumLoadFloor to 1 and the pitch from GenHumPitchIdle to 1; under GenHumMinLoad it is silent. New helpers GenHumNumber,
+--      GetGenHumSound, GetGenSoundSize, GetGenHum. (d) LAZER: the muzzle hum did not scale: MuzzlePitchSmall was 315, past the engine's 255 ceiling, so every lazer up to 144 mm had pitch 255, and the volume was
+--      held to 1 for every size (only the range grew). MuzzlePitchSmall is 255 now (the whole size range slopes from 255 to MuzzlePitchBig 180) and the engine's volume is the loudness divided by the BIGGER of
+--      MuzzleVolumeSmall and MuzzleVolumeBig (the biggest lazer at 1, the smallest at 1.4 / 2.4 = 0.58); the range still grows by MuzzleDbPerDoubling. New helper GetMuzzleSound(caliber); the lazer
+--      starts the hum with PlayEx(volume, pitch) instead of Play and two Change calls.
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -122,7 +152,7 @@
 --   HeatCoolHotBoost 1.3 (shipped 1)   HeatLazerSmall 10 (shipped 5)   HeatLazerBig 30 (shipped 5)
 --   HeatLazerCapF 900 (shipped 1100)   HeatExplodeChance 0.8 (shipped 0.5)   HeatMaxDeltaTime 0.25 (shipped 0.5)
 --   FusionHPMin 100 (shipped 250)   FusionMaxPerPlayer 8 (shipped 40)   FusionMassSmall 600 (shipped 1500)   FusionHeatScalar 2.5 (shipped 0.25)   FusionScaleSmall 0.3 (shipped 0.25)
--- Everything else is the shipped 19 value (RadFlushKJPerLiter 125000 is the shipped one; the other five player limits are 40: capacitor, generator, radiator, lazer and PPC; the fusion engine limit is YOUR 8). 19 changed: the PPC BALL: PPCBallMaterial models/alyx/emptool_glow (was the combine ball's models/effects/comball_sphere), a COLOUR the player picks in the PPC tool (new knobs PPCBallColorR / G / B, 0 255 255 = cyan, are the colour of a PPC that was never given one; the ball is always fully opaque) and a SIZE that grows with the caliber (new knobs PPCBallSizeSmall 0.5 and PPCBallSizeBig 3: half the old size at 50 mm, three times at 300 mm, a straight line between, exactly 1 at 100 mm: the balls are 2.5 / 10.4 / 24.3 / 44.8 / 72.5 / 108 units across at 50 / 100 / 150 / 200 / 250 / 300 mm). 18 changed: PPCBlastScalar 0.1224 (was 1: the PPC blast has HALF the radius, 100 mm 350 -> 175 units), PPCPropDamageScalar 640 (was 20 = 8 times the ACF damage, x4 on top to make up for the weaker blast) and PPCHeatPerDamage 3750 (was 30000: the heat a part gets close to the blast is what 17 gave it). 17 changed: the FUSION ENGINE gets a THROTTLE (the Active input, 0 to 1, is the operating percent it is asked to hold), a SIZE CURVE for scale and mass (FusionSizeCurve 1 and FusionSizeCurveRate 8: an inverse exponential, 0 on FusionSizeCurve is the straight line), a HUM (FusionHum... knobs, a looping sound that follows the operating percent and the size) and MORE HEAT PER kJ WHEN DAMAGED (FusionDamagedHeatMult 2: twice at 0% health). 16.9 changed: the FUSION ENGINE WAS REBUILT (one rated-power SLIDER, FusionHPMin 250 to FusionHPMax 6500 hp, instead of two fixed sizes: FusionTypes, FusionTypeDefault, FusionDrawDefault and FusionDrawMax are gone and the Fusion... knobs and helpers are new; FusionHeatScalar is 0.25), PPCEnergySmall 1000 / 3 and PPCEnergyBig 400000 / 3 (a third less energy per shot: the blast is made from that energy, so its filler is 2/3 of what it was; PPCBlastScalar 1.5 gives the old blast back) and the new PPCBallBigMult 1.2 (the 300 mm ball is 1.2 times bigger than the straight scaling of the 50 mm ball). 16.8 changed: PPCMassMin 255 (was 120: a 50 mm PPC weighs 355 kg, was 222), the EntityLimitsFromConfig knob of 16.7 is gone (nothing sets the limits from the config any more: your server settings do), and the first fusion engines (rebuilt in 16.9). 16.7 changed: PPCPropDamageScalar 20 (was 1: 20 times the ACF damage at the SAME blast radius, which PPCBlastScalar sets) and PPCHeatPerDamage 30000 (was 1000000: 20 x 30000 = 0.6 x the 16.6 blast heat). 16.6 changed: the smallest PPC is 50 mm (PPCCaliberMin 50; the new PPCCurveStart 20 keeps every number at 50 mm and above where it was); the PPC blast now heats only the parts it DAMAGES, in proportion to the damage (the new PPCHeatPerDamage and PPCHeatMaxPct 300 replace PPCHeatScalar and PPCHeatRadiusMult); the new HeatCheck... knobs belong to the Heat Checker tool (HeatCheckInterval, the lazers' own overheat check, is not one of them and is still 0.1). 16.5: PPCHeatPctSmall 67.8 and PPCHeatPctBig 100 (100 mm = 77%, 300 mm = 100% of the PPC's own limit per shot); 16.2: the PPCHeat... knobs (the PPC heats itself), the PPCFire... knobs (its fire sound) and HeatIgniteClasses holds acf_ppc).
+-- Everything else is the shipped 21 value (RadFlushKJPerLiter 125000 is the shipped one; the other five player limits are 40: capacitor, generator, radiator, lazer and PPC; the fusion engine limit is YOUR 8). 21 changed: FOUR SOUNDS. The generator HUMS: GenHumSound ambient/grinder/grinderloop_01.wav, quieter, higher and softer for a small hub and louder and deeper for a big one (GenHumVolumeSmall 0.35 / GenHumVolumeBig 1, GenHumPitchSmall 140 / GenHumPitchBig 70, GenHumLevelSmall 55 / GenHumLevelBig 85 dB, the size is the same model curve as the generator's scale), and it follows the load: at a trickle of load it plays at GenHumLoadFloor 0.4 of the volume and GenHumPitchIdle 0.85 of the pitch, and below GenHumMinLoad 0.01 it is silent. The PPC's fire burst is PPCFireSound beams/beamstart5.wav (the zap crackle stays) and a small PPC is quieter: PPCFireVolumeSmallMult 0.6 at PPCCurveStart 20 mm (a 50 mm PPC is at 0.64, a 100 mm one at 0.71), a straight line up to 1 at 300 mm (its pitch 125 to 75 was already there). The FUSION ENGINE's hum is FusionHumSound ambient/machines/refrigerator.wav (its pitch already follows its size: FusionHumPitchSmall 125 to FusionHumPitchBig 70). The LAZERS' sound scales again: MuzzlePitchSmall 255 (was 315, which the engine held to 255, so every lazer up to about 144 mm had the same pitch) and the engine volume is now the loudness divided by the larger of MuzzleVolumeSmall 1.4 and MuzzleVolumeBig 2.4 (it was min(loudness, 1) = 1 at every size), so the smallest lazer plays at 0.58 and the biggest at 1. 20 changed: the PPC BLAST HAS ITS OWN DAMAGE MODEL (the flag PPCOwnDamage, on; PPCBlastHealthSmall 2.2 and PPCBlastHealthBig 4.4 set the damage a part takes in multiples of ITS OWN base health, PPCArmourInfluence 0.25 is how much its armour counts: 0 = not at all, 1 = ACF's own law; the falloff is an INVERSE EXPONENTIAL, PPCFalloffRate 3, PPCFalloffBlend 1 = fully curved, 0 = the straight line), the PPC's SELF-DAMAGE IS 4 TIMES SLOWER (PPCHeatDamageMult 0.25) and is fast (PPCHeatOverfireMult 1) only for PPCHeatOverfireSeconds 5 after a shot that was fired while it was already over 100%, FusionSizeCurve 0.75 (was 1: the fusion model's size follows the inverse exponential 3/4 as much) and the fusion engine's MASS follows its rated power in a straight line (the size curve no longer touches it). 19 changed: the PPC BALL: PPCBallMaterial models/alyx/emptool_glow (was the combine ball's models/effects/comball_sphere), a COLOUR the player picks in the PPC tool (new knobs PPCBallColorR / G / B, 0 255 255 = cyan, are the colour of a PPC that was never given one; the ball is always fully opaque) and a SIZE that grows with the caliber (new knobs PPCBallSizeSmall 0.5 and PPCBallSizeBig 3: half the old size at 50 mm, three times at 300 mm, a straight line between, exactly 1 at 100 mm: the balls are 2.5 / 10.4 / 24.3 / 44.8 / 72.5 / 108 units across at 50 / 100 / 150 / 200 / 250 / 300 mm). 18 changed: PPCBlastScalar 0.1224 (was 1: the PPC blast has HALF the radius, 100 mm 350 -> 175 units), PPCPropDamageScalar 640 (was 20 = 8 times the ACF damage, x4 on top to make up for the weaker blast) and PPCHeatPerDamage 3750 (was 30000: the heat a part gets close to the blast is what 17 gave it). 17 changed: the FUSION ENGINE gets a THROTTLE (the Active input, 0 to 1, is the operating percent it is asked to hold), a SIZE CURVE for scale and mass (FusionSizeCurve 1 and FusionSizeCurveRate 8: an inverse exponential, 0 on FusionSizeCurve is the straight line), a HUM (FusionHum... knobs, a looping sound that follows the operating percent and the size) and MORE HEAT PER kJ WHEN DAMAGED (FusionDamagedHeatMult 2: twice at 0% health). 16.9 changed: the FUSION ENGINE WAS REBUILT (one rated-power SLIDER, FusionHPMin 250 to FusionHPMax 6500 hp, instead of two fixed sizes: FusionTypes, FusionTypeDefault, FusionDrawDefault and FusionDrawMax are gone and the Fusion... knobs and helpers are new; FusionHeatScalar is 0.25), PPCEnergySmall 1000 / 3 and PPCEnergyBig 400000 / 3 (a third less energy per shot: the blast is made from that energy, so its filler is 2/3 of what it was; PPCBlastScalar 1.5 gives the old blast back) and the new PPCBallBigMult 1.2 (the 300 mm ball is 1.2 times bigger than the straight scaling of the 50 mm ball). 16.8 changed: PPCMassMin 255 (was 120: a 50 mm PPC weighs 355 kg, was 222), the EntityLimitsFromConfig knob of 16.7 is gone (nothing sets the limits from the config any more: your server settings do), and the first fusion engines (rebuilt in 16.9). 16.7 changed: PPCPropDamageScalar 20 (was 1: 20 times the ACF damage at the SAME blast radius, which PPCBlastScalar sets) and PPCHeatPerDamage 30000 (was 1000000: 20 x 30000 = 0.6 x the 16.6 blast heat). 16.6 changed: the smallest PPC is 50 mm (PPCCaliberMin 50; the new PPCCurveStart 20 keeps every number at 50 mm and above where it was); the PPC blast now heats only the parts it DAMAGES, in proportion to the damage (the new PPCHeatPerDamage and PPCHeatMaxPct 300 replace PPCHeatScalar and PPCHeatRadiusMult); the new HeatCheck... knobs belong to the Heat Checker tool (HeatCheckInterval, the lazers' own overheat check, is not one of them and is still 0.1). 16.5: PPCHeatPctSmall 67.8 and PPCHeatPctBig 100 (100 mm = 77%, 300 mm = 100% of the PPC's own limit per shot); 16.2: the PPCHeat... knobs (the PPC heats itself), the PPCFire... knobs (its fire sound) and HeatIgniteClasses holds acf_ppc).
 -- =========================================================================
 
 if SERVER then AddCSLuaFile() end
@@ -435,6 +465,18 @@ table.Merge(ACFLazers.Config, {
     -- RUNNING. The generator thinks every server tick (like the engine) because it has to slow the flywheel once per engine tick.
     GenMaxDeltaTime    = 0.1,   -- seconds. Longest "time since last tick" it will act for (a lag spike cannot take a huge bite out of an engine)
     GenOutputInterval  = 0.25,  -- seconds between refreshes of the wire outputs and the hover text
+    -- HUM [21]. A grinding loop at the hub while it takes power from its engines: the bigger the hub (by its model size curve, GenScaleKnots) the louder, deeper and the farther it carries; the load
+    -- (hp taken / rated hp) also raises the volume and the pitch. Played from the SERVER, so everybody near hears it. All the Small .. Big pairs run along the size fraction.
+    GenHumSound        = "ambient/grinder/grinderloop_01.wav", -- [21] your pick. [GUESS] that it loops by itself. "" = no hum
+    GenHumVolumeSmall  = 0.35,  -- [GUESS] volume (0..1) at full load for the smallest hub (GenHPMin) ...
+    GenHumVolumeBig    = 1,     -- [GUESS] ... and for the biggest (GenHPMax)
+    GenHumPitchSmall   = 140,   -- [GUESS] pitch (100 = the file as it is) at full load for the smallest hub ...
+    GenHumPitchBig     = 70,    -- [GUESS] ... and for the biggest (deeper). Held to 1 .. 255
+    GenHumPitchIdle    = 0.85,  -- [GUESS] the pitch at a trickle of load as a multiple of the pitch at full load (a straight line between)
+    GenHumLoadFloor    = 0.4,   -- [GUESS] the share of the volume a trickle of load gets (a straight line up to 1 at full load)
+    GenHumLevelSmall   = 55,    -- [GUESS] sound level in dB for the smallest hub (higher = it can be heard from farther; 75 is the normal level) ...
+    GenHumLevelBig     = 85,    -- [GUESS] ... and for the biggest
+    GenHumMinLoad      = 0.01,  -- below this load (a fraction of the rating) there is no hum at all
     -- BODY. Mass, armour and health. Mass = GenMassAtOne x scale ^ GenMassExponent (a volume-like curve: 50 hp = 50 kg, 350 hp = 400 kg, 3500 hp = 3200 kg).
     GenMassAtOne       = 400,   -- [GUESS] kg at model scale 1 (ACF's 9.0L V8 petrol weighs 400 kg [SEEN acf/entities/engines/v8.lua:36])
     GenMassExponent    = 3,
@@ -477,7 +519,7 @@ table.Merge(ACFLazers.Config, {
     FusionMassBig       = 10000,  -- kg at FusionHPMax
     FusionScaleSmall    = 0.3,    -- [YOUR VALUE, shipped 0.25] model scale at FusionHPMin
     FusionScaleBig      = 1,      -- model scale at FusionHPMax
-    FusionSizeCurve     = 1,      -- [17] how the size (model scale AND mass) grows with the slider: 0 = a straight line, 1 = inverse exponential (small engines grow fast, big ones slowly), in between = a blend of the two
+    FusionSizeCurve     = 0.75,   -- [20] (17: 1) how the MODEL SCALE grows with the slider: 0 = a straight line, 1 = inverse exponential (small engines grow fast, big ones slowly), in between = a blend of the two. 0.75 = three quarters curve, one quarter line. The MASS does not use it any more (20): it is a straight line over the rated power
     FusionSizeCurveRate = 8,      -- [17] how sharp the inverse exponential is (only matters when FusionSizeCurve is over 0). Near 0 = it flattens back to a straight line, 8 = the 100 hp -> 300 hp step is 2.4x the size of the 2000 -> 6000 hp step
     FusionSpinUpSmall   = 8,      -- seconds from 0 to 100% operating at FusionHPMin
     FusionSpinUpBig     = 15,     -- seconds from 0 to 100% operating at FusionHPMax
@@ -503,7 +545,7 @@ table.Merge(ACFLazers.Config, {
     FusionBlastMinKJ    = 0.1,    -- kJ. A floor so an engine with no charge still pops a tiny bit (never exactly 0), like the capacitor's CapReleaseMinKJ
     -- HUM [17]. A looping sound that follows the operating percent: silent at 0%, louder and higher in pitch as it climbs, so you can hear how hard the engine is working. A bigger engine (by FusionSizeCurve's size
     -- fraction, the same curve as its model) hums louder, deeper and carries farther. The sound is played from the SERVER, so everybody near hears it.
-    FusionHumSound      = "ambient/machines/power_transformer_loop_1.wav", -- [GUESS] a looping low hum. "" = no hum. Other candidates: ambient/machines/combine_shield_loop3.wav, ambient/energy/force_field_loop1.wav
+    FusionHumSound      = "ambient/machines/refrigerator.wav", -- [21] your pick (17 to 20: ambient/machines/power_transformer_loop_1.wav). [GUESS] that it loops by itself. "" = no hum. Other candidates: ambient/machines/power_transformer_loop_1.wav, ambient/machines/combine_shield_loop3.wav, ambient/energy/force_field_loop1.wav
     FusionHumVolumeSmall = 0.3,   -- [GUESS] volume (0..1) at 100% operating for the smallest engine (it scales straight down with the operating percent)
     FusionHumVolumeBig  = 1,      -- [GUESS] ... and for the biggest
     FusionHumPitchSmall = 125,    -- [GUESS] pitch (100 = the file as it is) at 100% operating for the smallest engine
@@ -785,16 +827,35 @@ table.Merge(ACFLazers.Config, {
 
     -- THE EXPLOSION. HE filler (kg) = kJ of the shot x PPCBlastScalar / ACF.HEPower. The blast radius and power are ACF's own for that filler.
     PPCBlastScalar    = 0.1224, -- [18] (17: 1) 1 = the shot's kJ become HE at ACF's rate. 2 = twice the filler (a bigger blast). ACF's blast radius grows with the filler to the power 0.33, so 0.1224 makes the RADIUS HALF of what it was (0.1224 ^ 0.33 = 0.5: a 100 mm shot 350 -> 175 units, a 300 mm shot 797 -> 399). The shot costs the same energy; PPCPropDamageScalar below makes up for the weaker blast
-    PPCPropDamageScalar = 640,  -- [18] (17: 20; 16.7: was 1) multiplier on the damage props (and people) take from the blast, on top of what ACF works out from the blast each one received. 640 = 8 x 20 (8 times what 17 did) x 4 (to make up for the smaller blast: ACF's blast penetration falls with the filler, so at the same distance a part behind armour takes about a quarter of the damage; with the x4 a part next to the blast takes what the 8 times blast of the old radius gave it, one farther out a little less). It is applied AFTER ACF has chosen who the blast reaches, so it never changes the blast RADIUS (that follows the HE filler: PPCBlastScalar) or who is in it; ACF's own loss maths does not see it either (a part that dies of it stops shielding the parts behind it)
+    PPCPropDamageScalar = 640,  -- [20] ONLY for people and while PPCOwnDamage is off (props take the 20 model, PPCOwnDamage below). [18] (17: 20; 16.7: was 1) multiplier on the damage props (and people) take from the blast, on top of what ACF works out from the blast each one received. 640 = 8 x 20 (8 times what 17 did) x 4 (to make up for the smaller blast: ACF's blast penetration falls with the filler, so at the same distance a part behind armour takes about a quarter of the damage; with the x4 a part next to the blast takes what the 8 times blast of the old radius gave it, one farther out a little less). It is applied AFTER ACF has chosen who the blast reaches, so it never changes the blast RADIUS (that follows the HE filler: PPCBlastScalar) or who is in it; ACF's own loss maths does not see it either (a part that dies of it stops shielding the parts behind it)
     PPCFragmentScalar = 0,      -- multiplier on the damage from the FRAGMENT part of ACF's HE explosion. 0 = none, a pure blast; 1 = as ACF's own HE rounds
     PPCFragMassRatio  = 0.5,    -- the casing mass handed to ACF's explosion, as a multiple of the filler (the capacitor's explosion uses 0.5 too). Only matters while PPCFragmentScalar is above 0
     PPCBlastBackoff   = 4,      -- units: the explosion happens this far in front of the surface the projectile hit (so it is not inside the plate)
+
+    -- THE BLAST'S DAMAGE MODEL. [20] ACF's explosion still decides WHICH parts the blast reaches and which are blocked (line of sight, permissions, safezones, the shooter's contraption). Its damage numbers are
+    -- replaced, part by part, by this (not for people, who keep the PPCPropDamageScalar path above):
+    --     damage = (part area cm2 / 264.7) x S(caliber) x F(x) x A x (the shot's age factor, PPCDamageAtEnd)
+    -- that is  S x F x A  TIMES THE PART'S OWN BASE HEALTH (the health ACF gives a part of that area before its ductility). x = distance from the blast centre / the blast radius (0 .. 1).
+    -- S is how hard the centre hits, F the falloff (1 at the centre, 0 at the edge), A the armour factor (1 = armour does not matter).
+    PPCOwnDamage      = true,   -- [20] true = the model below. false (or 0) = the 19 model for everything: ACF's damage x PPCPropDamageScalar
+    PPCBlastHealthSmall = 2.2,  -- [20] S at the smallest PPC (PPCCaliberMin, 50 mm): the centre of the blast does this many times a part's base health (before F and A). 2.2: a part with no armour to speak of dies within about a quarter of the radius
+    PPCBlastHealthBig = 4.4,    -- [20] ... and at the biggest (PPCCaliberMax, 300 mm), a straight line between (100 mm: 2.64). Chosen so a 20 mm part at 10% of the radius takes what 19 gave it (100 mm shot: about 16 points for a 3000 cm2 part; 300 mm shot: about 27)
+    PPCArmourInfluence = 0.25,  -- [20] 0..1: how much armour matters. A = (1 - this) + this x (min(1, blast penetration / armour))^2. 0 = armour is ignored (a 50 mm plate takes what a 1 mm plate takes), 1 = ACF's own law (the damage falls with the square of the armour). 0.25: the thickest armour takes 75% of the unarmoured damage. A PPC blast penetrates only 1 to 4 mm, so without this every real armour plate was almost immune
+    PPCFalloffBlend   = 1,      -- [20] 0..1: 1 = the inverse exponential below, 0 = a straight line 1 - x, in between = a mix of the two
+    PPCFalloffRate    = 3,      -- [20] how sharp the inverse exponential is: F(x) = (e^(-rate x) - e^(-rate)) / (1 - e^(-rate)). 3: half the centre damage at about 20% of the radius, an eighth at 60%. Near 0 = it flattens into the straight line, 8 = nearly all the damage is next to the centre
+    --   Damage in multiples of the part's base health at rate 3 (100 mm shot S 2.64, 300 mm shot S 4.4), armour factor 1 (times 0.75 for the thickest armour):
+    --        x (share of the radius)         5%    10%    25%    50%    75%    90%
+    --        100 mm shot                 2.25   1.92   1.17   0.48   0.15   0.05
+    --        100 mm shot, armoured       1.69   1.44   0.88   0.36   0.12   0.04
+    --        300 mm shot                 3.76   3.20   1.96   0.80   0.26   0.08
+    --        300 mm shot, armoured       2.82   2.40   1.47   0.60   0.19   0.06
 
     -- THE BLAST'S HEAT. [CHANGED 28] (16.6) The blast heats ONLY the parts it DAMAGES, in proportion to the damage. For every part ACF's explosion hurts (ACF decides who: the line of sight to the blast, the armour in
     -- the way, the shooter's contraption and the safezone filters of 16.1 all apply) the damage it took from this blast (ACF health points, the blast and fragment parts added, after PPCPropDamageScalar,
     -- PPCFragmentScalar and the shot's age factor) x PPCHeatPerDamage is added as heat (kJ). Never more than PPCHeatMaxPct percent of the heat that takes THAT part from room temperature to the HOT
     -- temperature, so a thin, light prop is not cooked to thousands of kelvin. Parts the blast does not hurt (behind armour, out of sight, the shooter's own contraption, safezones, people) get NO heat;
     -- the 16.1 sphere pass (everything inside the blast radius, falling off with distance, PPCHeatScalar and PPCHeatRadiusMult) is gone.
+    -- (The next table is ACF's own damage law: it is what people take, and what everything takes while PPCOwnDamage is off. With the 20 model (the default) the armour matters far less: see THE BLAST'S DAMAGE MODEL above.)
     -- THE CATCH: ACF's blast damage to a part is  (its area / 264.7 x a falloff) x (blast penetration / its armour)^2  (the ratio never counts above 1), and a PPC blast's penetration is only 1 to 4 mm.
     -- So damage drops with the SQUARE of the armour: a part with 50 mm of armour (a 100 mm lazer) takes almost nothing, one with 5 mm about a hundred times more, one with 2 mm or less takes the most
     -- the blast can give (area / 264.7 x falloff). The damage of a 3000 cm2 part, a fresh shot, AT PPCPropDamageScalar 1 and the shipped PPCBlastScalar 0.1224 (the shipped 640 makes every damage number 640 times this; heat = damage x PPCHeatPerDamage, before the cap):
@@ -837,7 +898,10 @@ table.Merge(ACFLazers.Config, {
     PPCHeatPctSmall   = 67.8,   -- [CHANGED 27] (16.5: was 77) percent of its own limit (PPCHeatCapF) that ONE shot at PPCCurveStart (20 mm) adds to its heat: 100 = one shot takes it to its limit, 51 was the 100 mm value in 16.2. 0 = a PPC never heats itself
     PPCHeatPctBig     = 100,    -- [CHANGED 27] (16.5: was 77) ... and of the biggest (PPCCaliberMax), a straight line between (like HeatLazerSmall .. HeatLazerBig). The line through (100 mm, 77%) and (300 mm, 100%) gives 67.8 at 20 mm
     PPCHeatCapF       = 900,    -- degrees Fahrenheit. 100% of a PPC (the same 900 as your HeatLazerCapF, but its own knob so the two can be tuned apart)
-    PPCHeatDamage     = 4,      -- percent of a PPC's MAX HEALTH lost per second when it is twice as hot as its limit (200%), growing with the square of how far over it is (like HeatLazerDamage). 0 = a PPC never hurts itself (no turbo either)
+    PPCHeatDamage     = 4,      -- (20: times PPCHeatDamageMult or PPCHeatOverfireMult, below) percent of a PPC's MAX HEALTH lost per second when it is twice as hot as its limit (200%), growing with the square of how far over it is (like HeatLazerDamage). 0 = a PPC never hurts itself (no turbo either)
+    PPCHeatDamageMult = 0.25,   -- [20] multiplies the PPC's whole self-damage (PPCHeatDamage's over^2 law AND the turbo part) while it is over its limit and has NOT fired while over its limit. 0.25 = four times slower. 0 = it never hurts itself that way
+    PPCHeatOverfireMult = 1,    -- [20] ... and this is the multiplier for PPCHeatOverfireSeconds after a shot that was released while the PPC was ALREADY over 100% of its limit (the heat before the shot's own heat counts). 1 = the full speed of 19
+    PPCHeatOverfireSeconds = 5, -- [20] seconds the fast damage lasts after such a shot (every shot fired over the limit restarts it). 0 = firing over the limit never makes the damage faster
     PPCHeatExplodeChance = 0.8, -- 0..1. A PPC that dies of its own heat explodes with this chance when it fired recently (see PPCHeatFiringSeconds); otherwise it just dies. 0.8 = your HeatExplodeChance
     PPCHeatExplosionMult = 1 / 3, -- the death explosion's HE filler = this x the filler a LAZER of the same size makes when it explodes (GetLazerExplosionFiller: its draw x HeatExplodeKJMult over ACF's kJ per kg of HE x HeatExplosionMult). 1/3 = a third of the lazer's. A 100 mm PPC: 0.27 kg of HE
     PPCHeatDeathDebrisPower = 20000, -- [GUESS] how hard the pieces fly when a PPC just dies of heat (the lazer's HeatDeathDebrisPower; capped by MaxDebrisPower)
@@ -847,13 +911,14 @@ table.Merge(ACFLazers.Config, {
     -- sound, a list { "a.wav", "b.wav" } picks one at random each shot, "" (or an empty list) is none. The paths are relative to the game's sound folder; they were checked against the Garry's Mod wiki's HL2 sound
     -- list [SEEN], but nobody here has HEARD them: to try one, type  play ambient/energy/whiteflash.wav  in the game console. Other candidates: ambient/levels/citadel/portal_beam_shoot1.wav .. 6, ambient/levels/citadel/
     -- weapon_disintegrate1.wav .. 4, ambient/levels/labs/electric_explosion1.wav .. 5 (a loud electrical bang: more an explosion), ambient/energy/weld1.wav, weld2.wav, spark1.wav .. 6.
-    PPCFireSound      = "ambient/energy/whiteflash.wav", -- [GUESS] the burst: a bright electrical flash. "" = none
+    PPCFireSound      = "beams/beamstart5.wav", -- [21] your pick (16.2 to 20: ambient/energy/whiteflash.wav): the burst. [GUESS] what it sounds like. "" = none
     PPCFireSound2     = { "ambient/energy/zap1.wav", "ambient/energy/zap2.wav", "ambient/energy/zap3.wav", "ambient/energy/zap5.wav", "ambient/energy/zap6.wav", "ambient/energy/zap7.wav", "ambient/energy/zap8.wav", "ambient/energy/zap9.wav" }, -- [GUESS] the crackle: electric zaps (there is no zap4)
     PPCFireSoundLevel = 100,    -- sound level in decibels (Source's SNDLVL): how far it carries. 75 = a normal voice, 100 = a gunshot, 120+ = heard across a map
     PPCFireVolume     = 1,      -- 0..1, the burst
     PPCFireVolume2    = 0.8,    -- 0..1, the crackle
     PPCFirePitchSmall = 125,    -- pitch of the smallest PPC (100 = the file as it is, higher = higher and shorter) ...
     PPCFirePitchBig   = 75,     -- ... and of the biggest, a straight line between: a big PPC sounds deeper. Clamped to 20 .. 255
+    PPCFireVolumeSmallMult = 0.6, -- [21] 0..1: both layers play at this share of their volume at the smallest PPC (PPCCurveStart), a straight line up to their full volume at PPCCaliberMax: a big PPC is louder. 1 = the same volume at every size
     -- ===================== LINKING TOOLS =====================
     -- The things the link tools (right-click / shift / reload on the lazer, capacitor and generator tools) can select and link. ACF's own link system decides which PAIRS work:
     --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor, PPC <-> capacitor, radiator <-> radiator (a pool).
@@ -899,13 +964,13 @@ table.Merge(ACFLazers.Config, {
     -- MuzzleDbPerDoubling extra decibels of SOUND LEVEL, which makes it carry farther (more distance before it fades). [GUESS] that SetSoundLevel works on a
     -- CreateSound; point-blank the hum can't get louder than 1.0, far away the big lazers are clearly louder.
     -- Asked: big twice as loud as small (1.0 x 2 = 2.0), then +0.4 on both = 1.4 and 2.4. (If you meant big = exactly 2 x the NEW small, make it 2.8.)
-    MuzzleVolumeSmall = 1.4,    -- loudness of the smallest lazer (was 1.0)
-    MuzzleVolumeBig   = 2.4,    -- loudness of the biggest lazer (was 1.0)
+    MuzzleVolumeSmall = 1.4,    -- loudness of the smallest lazer (was 1.0). [21] The engine's volume is the loudness / the BIGGER of the two numbers (so the biggest lazer is at 1 and the smallest at 1.4 / 2.4 = 0.58)
+    MuzzleVolumeBig   = 2.4,    -- loudness of the biggest lazer (was 1.0). [21] (16.1 to 20: the engine's volume was min(loudness, 1) = 1 at every size, so only the range showed the size)
     MuzzleSoundLevel    = 75,   -- [GUESS] decibels the hum starts from (75 = the engine's normal level)
     MuzzleDbPerDoubling = 6,    -- [KNOW-ish] +6 dB is about twice the sound pressure; extra dB per doubling of loudness above 1.0. 0 = never use sound level
-    -- +60 on both (your new sound pack). 315 is past the engine's 255 ceiling, so the smallest lazers just sit at 255 until the slide comes
-    -- down under it (at about 144 mm, 44% of the way up the size range); everything bigger really is 60 higher than before.
-    MuzzlePitchSmall  = 315,    -- was 255
+    -- [21] +60 on both was your sound pack's number (180 at the biggest), but 315 is past the engine's 255 ceiling: every lazer up to 144 mm (44% of the size range) played at 255, so the
+    -- hum did not change with the size. 255 is the engine's top, so the whole range slopes from 255 (the smallest) down to MuzzlePitchBig now (16.1 to 20: 315).
+    MuzzlePitchSmall  = 255,    -- was 315 (16.1 to 20), 255 before your sound pack
     MuzzlePitchBig    = 180,    -- was 120
 
     -- ===================== END-OF-BEAM SOUNDS =====================
@@ -973,6 +1038,25 @@ function ACFLazers.GetSizeFraction(caliber)
     local span = math.max(C.CaliberMax - C.CaliberMin, 0.0001)
 
     return math.Clamp((caliber - C.CaliberMin) / span, 0, 1)
+end
+
+--- [21] The lazer's muzzle hum for a caliber: { volume, pitch, level, loudness }.
+---   loudness = MuzzleVolumeSmall .. MuzzleVolumeBig along the size fraction (it may be above 1)
+---   volume   = loudness / the bigger of MuzzleVolumeSmall, MuzzleVolumeBig and 1, held to 0..1 (the engine's volume stops at 1: the biggest lazer is at 1, a smaller one is quieter by the same ratio)
+---   pitch    = MuzzlePitchSmall .. MuzzlePitchBig along the size fraction, held to the engine's 1..255
+---   level    = MuzzleSoundLevel + MuzzleDbPerDoubling x the doublings of loudness above 1 (sound level in dB, held to 20..140: how far it carries)
+function ACFLazers.GetMuzzleSound(caliber)
+    local C        = ACFLazers.Config
+    local size     = ACFLazers.GetSizeFraction(ACFLazers.ClampNumber(caliber, C.CaliberMin, C.CaliberMin, C.CaliberMax))
+    local vSmall   = ACFLazers.ClampNumber(C.MuzzleVolumeSmall, 1.4, 0, 100)
+    local vBig     = ACFLazers.ClampNumber(C.MuzzleVolumeBig, 2.4, 0, 100)
+    local loudness = Lerp(size, vSmall, vBig)
+    local volume   = math.Clamp(loudness / math.max(vSmall, vBig, 1), 0, 1)
+    local pitch    = math.Clamp(Lerp(size, ACFLazers.ClampNumber(C.MuzzlePitchSmall, 255, 0, 1000), ACFLazers.ClampNumber(C.MuzzlePitchBig, 180, 0, 1000)), 1, 255)
+    local doublings = loudness > 1 and math.log(loudness) / math.log(2) or 0
+    local level    = math.Clamp(ACFLazers.ClampNumber(C.MuzzleSoundLevel, 75, 0, 200) + ACFLazers.ClampNumber(C.MuzzleDbPerDoubling, 6, 0, 100) * doublings, 20, 140)
+
+    return { volume = volume, pitch = pitch, level = level, loudness = loudness }
 end
 
 --- Mass in kg for a caliber, from the anchors + exponent above.
@@ -1442,21 +1526,22 @@ local PPCNumberDefaults = {
     PPCEnergySmall = 1000 / 3, PPCEnergyBig = 400000 / 3, PPCEnergyCurve = 0.75,
     PPCSpeedSmall = 600, PPCSpeedBig = 800, PPCLifetime = 7, PPCDamageAtEnd = 0.8, PPCBallDiameter = 10, PPCBallModelDiameter = 3, PPCBallBigMult = 1.2, PPCBallSizeSmall = 0.5, PPCBallSizeBig = 3, PPCBallColorR = 0, PPCBallColorG = 255, PPCBallColorB = 255,
     PPCBlastScalar = 0.1224, PPCPropDamageScalar = 640, PPCFragmentScalar = 0, PPCFragMassRatio = 0.5, PPCBlastBackoff = 4, PPCHeatPerDamage = 3750, PPCHeatMaxPct = 300,
+    PPCBlastHealthSmall = 2.2, PPCBlastHealthBig = 4.4, PPCArmourInfluence = 0.25, PPCFalloffBlend = 1, PPCFalloffRate = 3,
     PPCRefireSeconds = 1, PPCMaxPerPlayer = 40,
-    PPCHeatPctSmall = 67.8, PPCHeatPctBig = 100, PPCHeatCapF = 900, PPCHeatDamage = 4, PPCHeatExplodeChance = 0.8, PPCHeatExplosionMult = 1 / 3,
+    PPCHeatPctSmall = 67.8, PPCHeatPctBig = 100, PPCHeatCapF = 900, PPCHeatDamage = 4, PPCHeatDamageMult = 0.25, PPCHeatOverfireMult = 1, PPCHeatOverfireSeconds = 5, PPCHeatExplodeChance = 0.8, PPCHeatExplosionMult = 1 / 3,
     PPCHeatDeathDebrisPower = 20000, PPCHeatFiringSeconds = 5,
-    PPCFireSoundLevel = 100, PPCFireVolume = 1, PPCFireVolume2 = 0.8, PPCFirePitchSmall = 125, PPCFirePitchBig = 75,
+    PPCFireSoundLevel = 100, PPCFireVolume = 1, PPCFireVolume2 = 0.8, PPCFirePitchSmall = 125, PPCFirePitchBig = 75, PPCFireVolumeSmallMult = 0.6,
 }
 
 local PPCStringDefaults = {
     PPCModel = "models/lasers/ppc.mdl", PPCBallModel = "models/sprops/geometry/sphere_3.mdl", PPCBallMaterial = "models/alyx/emptool_glow",
 }
 
-local PPCFlagDefaults = { PPCAutoRepeat = true }
+local PPCFlagDefaults = { PPCAutoRepeat = true, PPCOwnDamage = true }
 
 -- [CHANGED 24] (16.2) The two fire-sound layers: a text, or a list of texts (one picked at random each shot).
 local PPCSoundDefaults = {
-    PPCFireSound  = "ambient/energy/whiteflash.wav",
+    PPCFireSound  = "beams/beamstart5.wav",
     PPCFireSound2 = { "ambient/energy/zap1.wav", "ambient/energy/zap2.wav", "ambient/energy/zap3.wav", "ambient/energy/zap5.wav", "ambient/energy/zap6.wav", "ambient/energy/zap7.wav", "ambient/energy/zap8.wav", "ambient/energy/zap9.wav" },
 }
 
@@ -1602,6 +1687,99 @@ function ACFLazers.GetPPCBallColor(r, g, b)
     return math.Round(ACFLazers.ClampNumber(r, dr, 0, 255)), math.Round(ACFLazers.ClampNumber(g, dg, 0, 255)), math.Round(ACFLazers.ClampNumber(b, db, 0, 255))
 end
 
+--- [20] ACF's damage threshold (cm2 of armoured surface per point of health): ACF.Threshold (264.7) when ACF has it, 264.7 when not.
+function ACFLazers.GetPPCThreshold()
+    local t = ACF and tonumber(ACF.Threshold)
+
+    if t and t > 0 and t < math.huge then return t end
+
+    return 264.7
+end
+
+--- [20] S: how many times a part's base health the CENTRE of a blast of this caliber does: PPCBlastHealthSmall at PPCCaliberMin, PPCBlastHealthBig at PPCCaliberMax, a straight line between (a caliber outside the
+--- range counts as the nearest end; a negative knob counts as 0).
+function ACFLazers.GetPPCBlastHealth(caliber)
+    local low  = ACFLazers.PPCNumber("PPCCaliberMin")
+    local high = ACFLazers.PPCNumber("PPCCaliberMax")
+    local t    = math.Clamp((ACFLazers.ClampNumber(caliber, low, low, math.huge) - low) / math.max(high - low, 1e-6), 0, 1)
+
+    return Lerp(t, math.max(ACFLazers.PPCNumber("PPCBlastHealthSmall"), 0), math.max(ACFLazers.PPCNumber("PPCBlastHealthBig"), 0))
+end
+
+--- [20] F(x): the blast's falloff. x = distance / blast radius, held to 0 .. 1 (junk counts as 1, the edge). The inverse exponential (e^(-rate x) - e^(-rate)) / (1 - e^(-rate)), blended with the straight line
+--- 1 - x by PPCFalloffBlend (held to 0 .. 1; junk = 1). The rate is held to 0.001 .. 100 (junk = 3). F(0) = 1 and F(1) = 0 whatever the knobs.
+function ACFLazers.GetPPCBlastFalloff(x)
+    x = ACFLazers.ClampNumber(x, 1, 0, 1)
+
+    local blend = ACFLazers.ClampNumber(ACFLazers.PPCNumber("PPCFalloffBlend"), 1, 0, 1)
+    local rate  = ACFLazers.ClampNumber(ACFLazers.PPCNumber("PPCFalloffRate"), 3, 0.001, 100)
+    local line  = 1 - x
+    local curve = (math.exp(-rate * x) - math.exp(-rate)) / (1 - math.exp(-rate))
+
+    return math.Clamp(Lerp(blend, line, curve), 0, 1)
+end
+
+--- [20] A: the armour factor. ratio = min(1, penetration / armour); A = (1 - PPCArmourInfluence) + PPCArmourInfluence x ratio^2. PPCArmourInfluence is held to 0 .. 1 (junk = 0.25). A penetration or an armour
+--- that is not a number, or an armour of 0 or less, counts as ratio 1 (the armour is not counted).
+function ACFLazers.GetPPCArmourFactor(pen, armour)
+    local influence = ACFLazers.ClampNumber(ACFLazers.PPCNumber("PPCArmourInfluence"), 0.25, 0, 1)
+    local ratio     = 1
+
+    pen    = tonumber(pen)
+    armour = tonumber(armour)
+
+    if pen and armour and armour > 0 then
+        ratio = math.Clamp(pen / armour, 0, 1)
+
+        if ratio ~= ratio then ratio = 1 end
+    end
+
+    return (1 - influence) + influence * ratio * ratio
+end
+
+--- [20] The damage a PPC blast does to a part (before the shot's age factor): (area / threshold) x S(caliber) x F(x) x A(pen, armour). area = the part's ACF area (cm2), armour = its armour (mm), pen = the
+--- penetration ACF worked out for the blast at that part (mm), x = distance / blast radius. Junk, nothing and a part without area give 0; the result is never negative or infinite.
+function ACFLazers.GetPPCBlastDamage(area, armour, pen, x, caliber)
+    area = tonumber(area)
+
+    if not area or area ~= area or area <= 0 or area == math.huge then return 0 end
+
+    local damage = area / ACFLazers.GetPPCThreshold() * ACFLazers.GetPPCBlastHealth(caliber) * ACFLazers.GetPPCBlastFalloff(x) * ACFLazers.GetPPCArmourFactor(pen, armour)
+
+    if damage ~= damage or damage == math.huge or damage < 0 then return 0 end
+
+    return damage
+end
+
+--- [20] When the PPC's fast self-damage ends: `old` (CurTime() it ended, or the minus-a-billion of a PPC that never overfired) unless a shot is released NOW while the PPC is over 100% of its heat limit
+--- (`heatPct` 1 = the limit, read BEFORE the shot's own heat is added): then now + PPCHeatOverfireSeconds (never earlier than `old`).
+function ACFLazers.GetPPCOverfireUntil(now, heatPct, old)
+    old = tonumber(old)
+
+    if not old or old ~= old then old = -1e9 end
+
+    now     = tonumber(now)
+    heatPct = tonumber(heatPct)
+
+    if not now or now ~= now or now == math.huge or now == -math.huge then return old end
+
+    if heatPct and heatPct > 1 then
+        return math.max(now + math.max(ACFLazers.PPCNumber("PPCHeatOverfireSeconds"), 0), old)
+    end
+
+    return old
+end
+
+--- [20] The multiplier on a PPC's self-damage right now: PPCHeatOverfireMult while `now` is before `overfireUntil`, PPCHeatDamageMult otherwise. Never negative.
+function ACFLazers.GetPPCSelfDamageMult(now, overfireUntil)
+    now           = tonumber(now)
+    overfireUntil = tonumber(overfireUntil)
+
+    local fast = now and overfireUntil and now == now and overfireUntil == overfireUntil and now < overfireUntil
+
+    return math.max(ACFLazers.PPCNumber(fast and "PPCHeatOverfireMult" or "PPCHeatDamageMult"), 0)
+end
+
 --- [CHANGED 28] (16.6) kJ of heat a part gets from a PPC blast that did it `damage` points of ACF damage: damage x PPCHeatPerDamage, but never more than PPCHeatMaxPct percent of the heat that takes a part of
 --- heat capacity `capacity` (kJ per kelvin) from room temperature to the HOT temperature (PPCHeatMaxPct 0 = no limit; no capacity given = no limit). Junk, nothing and a negative number give 0.
 function ACFLazers.GetPPCDamageHeat(damage, capacity)
@@ -1658,6 +1836,11 @@ end
 --- Pitch (percent, 100 = the file as it is) of a PPC's fire sound: PPCFirePitchSmall at the smallest PPC, PPCFirePitchBig at the biggest, a straight line between; held to what the engine takes (20 .. 255).
 function ACFLazers.GetPPCFirePitch(caliber)
     return math.Clamp(Lerp(ACFLazers.GetPPCSizeFraction(caliber), ACFLazers.PPCNumber("PPCFirePitchSmall"), ACFLazers.PPCNumber("PPCFirePitchBig")), 20, 255)
+end
+
+--- [21] The loudness factor of a PPC's fire sound (both layers): PPCFireVolumeSmallMult at the smallest PPC, 1 at the biggest, a straight line between; held to 0..1.
+function ACFLazers.GetPPCFireVolumeMult(caliber)
+    return math.Clamp(Lerp(ACFLazers.GetPPCSizeFraction(caliber), ACFLazers.PPCNumber("PPCFireVolumeSmallMult"), 1), 0, 1)
 end
 
 --- The PPC's 100%, in kelvin above room temperature (its PPCHeatCapF).
@@ -2242,6 +2425,56 @@ function ACFLazers.GetGenScale(hp)
     return knots[count][2]
 end
 
+--- [21] The numbers a config without the generator hum lines uses (a test keeps them equal to the knobs written above).
+local GenHumDefaults = {
+    GenHumVolumeSmall = 0.35, GenHumVolumeBig = 1, GenHumPitchSmall = 140, GenHumPitchBig = 70, GenHumPitchIdle = 0.85, GenHumLoadFloor = 0.4,
+    GenHumLevelSmall = 55, GenHumLevelBig = 85, GenHumMinLoad = 0.01,
+}
+
+--- A generator hum number: the config's, or the default when the config has no real number there.
+function ACFLazers.GenHumNumber(name)
+    local v = tonumber(ACFLazers.Config[name])
+
+    if not v or v ~= v or v == math.huge or v == -math.huge then return GenHumDefaults[name] end
+
+    return v
+end
+
+--- The hum's sound file: the config's text ("" = no hum), or the default when the config has no text there.
+function ACFLazers.GetGenHumSound()
+    local v = ACFLazers.Config.GenHumSound
+
+    if type(v) == "string" then return v end
+
+    return "ambient/grinder/grinderloop_01.wav"
+end
+
+--- 0..1: how big a hub of this rating is on the model's own size curve (GetGenScale from GenHPMin to GenHPMax): 0 at the smallest, 1 at the biggest.
+function ACFLazers.GetGenSoundSize(hp)
+    local low  = ACFLazers.GetGenScale(ACFLazers.Config.GenHPMin)
+    local high = ACFLazers.GetGenScale(ACFLazers.Config.GenHPMax)
+
+    return math.Clamp((ACFLazers.GetGenScale(hp) - low) / math.max(high - low, 1e-6), 0, 1)
+end
+
+--- [21] The hum for a hub of this rating at this load (a fraction 0..1: hp taken / rated hp): a table { on, volume, pitch, level, size }.
+---   volume = (GenHumVolumeSmall .. Big along the size) x (GenHumLoadFloor .. 1 along the load), 0 under GenHumMinLoad (and with no sound file)
+---   pitch  = (GenHumPitchSmall .. Big along the size) x (GenHumPitchIdle .. 1 along the load), held to GMod's 1..255
+---   level  = GenHumLevelSmall .. Big along the size (sound level in dB, held to 20..140)
+function ACFLazers.GetGenHum(hp, load)
+    load = ACFLazers.ClampNumber(load, 0, 0, 1)
+
+    local size   = ACFLazers.GetGenSoundSize(hp)
+    local gain   = math.Clamp(Lerp(size, ACFLazers.GenHumNumber("GenHumVolumeSmall"), ACFLazers.GenHumNumber("GenHumVolumeBig")), 0, 1)
+    local volume = gain * Lerp(load, math.Clamp(ACFLazers.GenHumNumber("GenHumLoadFloor"), 0, 1), 1)
+    local pitch  = Lerp(size, ACFLazers.GenHumNumber("GenHumPitchSmall"), ACFLazers.GenHumNumber("GenHumPitchBig")) * Lerp(load, math.max(ACFLazers.GenHumNumber("GenHumPitchIdle"), 0), 1)
+    local level  = Lerp(size, ACFLazers.GenHumNumber("GenHumLevelSmall"), ACFLazers.GenHumNumber("GenHumLevelBig"))
+
+    if load < ACFLazers.GenHumNumber("GenHumMinLoad") or ACFLazers.GetGenHumSound() == "" then volume = 0 end
+
+    return { on = volume > 0, volume = volume, pitch = math.Clamp(pitch, 1, 255), level = math.Clamp(level, 20, 140), size = size }
+end
+
 --- Mass in kg of a generator with this rated power.
 function ACFLazers.GetGenMass(hp)
     local C = ACFLazers.Config
@@ -2318,7 +2551,7 @@ end
 -- The numbers a config without the fusion lines uses (a test keeps them equal to the knobs written above).
 local FusionNumberDefaults = {
     FusionHPMin = 250, FusionHPMax = 6500, FusionHPDefault = 6500,
-    FusionMassSmall = 1500, FusionMassBig = 10000, FusionScaleSmall = 0.25, FusionScaleBig = 1, FusionSizeCurve = 1, FusionSizeCurveRate = 8,
+    FusionMassSmall = 1500, FusionMassBig = 10000, FusionScaleSmall = 0.25, FusionScaleBig = 1, FusionSizeCurve = 0.75, FusionSizeCurveRate = 8,
     FusionSpinUpSmall = 8, FusionSpinUpBig = 15, FusionSpinDownMult = 1, FusionActiveDefault = 1, FusionNeedsParent = 1,
     FusionPPCRange = 300, FusionPPCCutMult = 1, FusionPPCScalarSmall = 1, FusionPPCScalarBig = 0.5,
     FusionPPCDelayMin = 1, FusionPPCDelayMaxSmall = 3, FusionPPCDelayMaxBig = 5,
@@ -2356,7 +2589,7 @@ function ACFLazers.GetFusionHumSound()
 
     if type(v) == "string" then return v end
 
-    return "ambient/machines/power_transformer_loop_1.wav"
+    return "ambient/machines/refrigerator.wav"
 end
 
 --- A rated power coming from the tool, a dupe or a console command, made safe: a whole number of hp between FusionHPMin and FusionHPMax (anything that is not a number becomes FusionHPDefault).
@@ -2378,7 +2611,7 @@ end
 --- How far along its SIZE range an engine of this rated power is: 0 = the smallest size, 1 = the biggest. [17] The slider position (GetFusionSlider) run through the size curve:
 ---   curved = (1 - e^(-rate x slider)) / (1 - e^(-rate))   (inverse exponential: it climbs fast at first and flattens out; 0 -> 0 and 1 -> 1 whatever the rate)
 ---   size   = slider + FusionSizeCurve x (curved - slider)  (FusionSizeCurve 0 = the straight line, 1 = fully curved, in between = a blend)
---- Model scale and mass both run on this. (Spin-up, the PPC numbers and the other "Small .. Big" pairs stay on the straight slider.)
+--- [20] Only the MODEL SCALE runs on this now. The mass (GetFusionMass), the spin-up, the PPC numbers and the other "Small .. Big" pairs are on the straight slider.
 function ACFLazers.GetFusionSizeFraction(hp)
     local slider = ACFLazers.GetFusionSlider(hp)
     local blend  = math.Clamp(ACFLazers.FusionNumber("FusionSizeCurve"), 0, 1) -- (FusionNumber gives the default for anything that is not a real number)
@@ -2393,9 +2626,9 @@ function ACFLazers.GetFusionScale(hp)
     return Lerp(ACFLazers.GetFusionSizeFraction(hp), ACFLazers.FusionNumber("FusionScaleSmall"), ACFLazers.FusionNumber("FusionScaleBig"))
 end
 
---- Mass (kg) for a rated power: FusionMassSmall .. FusionMassBig along the size fraction.
+--- Mass (kg) for a rated power: FusionMassSmall .. FusionMassBig on the straight slider, so it follows the rated power. [20] (17 to 19 ran it on the size fraction, the volume of the model.)
 function ACFLazers.GetFusionMass(hp)
-    return math.max(Lerp(ACFLazers.GetFusionSizeFraction(hp), ACFLazers.FusionNumber("FusionMassSmall"), ACFLazers.FusionNumber("FusionMassBig")), 1)
+    return math.max(Lerp(ACFLazers.GetFusionSlider(hp), ACFLazers.FusionNumber("FusionMassSmall"), ACFLazers.FusionNumber("FusionMassBig")), 1)
 end
 
 --- Seconds from 0 to 100% operating: FusionSpinUpSmall .. FusionSpinUpBig on a straight line (never under a hundredth of a second).
