@@ -1,5 +1,5 @@
 -- =========================================================================
--- NEW (16.8). Goes to:  lua/entities/acf_fusion/cl_init.lua
+-- REBUILT (16.9). Goes to:  lua/entities/acf_fusion/cl_init.lua
 --
 -- THE ACF FUSION ENGINE, client part. Nothing to draw but the model itself (ACF's scalable base draws it at the size the server set).
 -- =========================================================================

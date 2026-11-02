@@ -81,6 +81,20 @@
 --      FusionModel, FusionTypes (a LIST: the two sizes, each { id, name, mass, scale, hp }), FusionTypeDefault, FusionDrawDefault, FusionDrawMax, FusionHeatScalar, FusionPowerSmoothing, FusionMaxDeltaTime,
 --      FusionThinkInterval, FusionOutputInterval, FusionToolCapSize, FusionArmourAtOne, FusionHealthMult, FusionMaxPerPlayer (40: the server variable sbox_maxacf_fusions), the link class acf_fusion = "fusion" in
 --      LinkClasses, and the helpers FusionNumber, GetFusionTypes, ClampFusionType, GetFusionType, GetFusionRate, GetFusionReadout. Every fusion knob is OPTIONAL (the file has defaults for all of them).
+--          (16.9: the sizes, the Draw input and those helpers were replaced, see item 31.)
+--   31 (16.9) THE FUSION ENGINE REBUILT, AND THE PPC BALL. (a) The two fixed sizes (FusionTypes, FusionTypeDefault) are GONE: the Fusion tool has a SLIDER (rated hp, FusionHPMin 250 .. FusionHPMax 6500) and the mass, the model scale,
+--      the spin-up and the PPC numbers follow it on straight lines (FusionMassSmall / Big, FusionScaleSmall / Big, FusionSpinUpSmall / Big 8 s .. 15 s, FusionPPCScalarSmall / Big, FusionPPCDelayMaxSmall / Big 3 s .. 5 s).
+--      The Draw input is gone. The engine has an Active wire input and an OPERATING PERCENT that climbs to its efficiency ceiling (health x heat); it makes heat (FusionHeatScalar 0.25), runs only while PARENTED
+--      (FusionNeedsParent), explodes at FusionCriticalF (1500 F) or when destroyed with its CHARGE as the blast (FusionChargeSeconds, FusionChargeDrainSeconds, FusionBlastMult, FusionBlastMinKJ), cannot explode in a safezone,
+--      and a PPC detonating within FusionPPCRange (300) of it cuts its operating percent (FusionPPCCutMult, FusionPPCDelayMin). New knobs: FusionHPMin / Max / Default, Fusion...Small / Big pairs, FusionSpinDownMult,
+--      FusionActiveDefault, FusionNeedsParent, FusionPPC..., FusionCriticalF, FusionHeatEffStart, FusionHeatEffAtCritical, FusionDamagedEfficiency, FusionCharge..., FusionBlast.... FusionHeatScalar is 0.25 (was 0).
+--      New helpers: ClampFusionHP, GetFusionSlider, GetFusionScale, GetFusionMass, GetFusionSpinUp, GetFusionSpinRate, GetFusionRatedRate, GetFusionRate (now hp + operating), GetFusionChargeMax, GetFusionPPCScalar,
+--      GetFusionPPCCut, GetFusionRecoveryMax, GetFusionRecoveryDelay, GetFusionHealthEfficiency, GetFusionHeatEfficiency, GetFusionEfficiency, GetFusionRiseCritical, StepFusionOperating, StepFusionCharge,
+--      GetFusionBlastFiller, GetFusionReadout (now by hp). GONE: GetFusionTypes, ClampFusionType, GetFusionType. (b) THE PPC BALL: new knob PPCBallBigMult (1.2) and helper GetPPCBallMult. The flying ball still grows in
+--      proportion to the caliber, times a multiplier that is 1 at PPCCaliberMin (the 50 mm ball does not change) and PPCBallBigMult at PPCCaliberMax (300 mm), a straight line between: the 300 mm ball is 36 units across
+--      (6 x the 50 mm ball's 5 units, x 1.2) instead of 30. GetPPCBallScale includes it.
+--      (c) THE PPC SHOT ENERGY IS 2/3 OF WHAT IT WAS: PPCEnergySmall 1000 / 3 (was 500) and PPCEnergyBig 400000 / 3 (was 200000), so every caliber takes exactly 2/3 of its old energy per shot. Because the blast is made
+--      from the shot's energy (PPCBlastScalar), the HE filler is 2/3 of what it was too (the radius about 12% smaller); PPCBlastScalar 1.5 gives the old blast back.
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -88,7 +102,7 @@
 -- YOUR OWN VALUES: this copy carries them, so it can replace your file as it is. Every such line is marked [YOUR VALUE, shipped N]:
 --   HeatCoolHotBoost 1.3 (shipped 1)   HeatLazerSmall 10 (shipped 5)   HeatLazerBig 30 (shipped 5)
 --   HeatLazerCapF 900 (shipped 1100)   HeatExplodeChance 0.8 (shipped 0.5)   HeatMaxDeltaTime 0.25 (shipped 0.5)
--- Everything else is the shipped 16.8 value (RadFlushKJPerLiter 125000 is the shipped one; the six player limits are 40: capacitor, generator, radiator, lazer, PPC and fusion engine). 16.8 changed: PPCMassMin 255 (was 120: a 50 mm PPC weighs 355 kg, was 222), the EntityLimitsFromConfig knob of 16.7 is gone (nothing sets the limits from the config any more: your server settings do), and the new fusion engines (the Fusion... knobs, FusionTypes with the two sizes, the acf_fusion link class and the Fusion helpers). 16.7 changed: PPCPropDamageScalar 20 (was 1: 20 times the ACF damage at the SAME blast radius, which PPCBlastScalar sets) and PPCHeatPerDamage 30000 (was 1000000: 20 x 30000 = 0.6 x the 16.6 blast heat). 16.6 changed: the smallest PPC is 50 mm (PPCCaliberMin 50; the new PPCCurveStart 20 keeps every number at 50 mm and above where it was); the PPC blast now heats only the parts it DAMAGES, in proportion to the damage (the new PPCHeatPerDamage and PPCHeatMaxPct 300 replace PPCHeatScalar and PPCHeatRadiusMult); the new HeatCheck... knobs belong to the Heat Checker tool (HeatCheckInterval, the lazers' own overheat check, is not one of them and is still 0.1). 16.5: PPCHeatPctSmall 67.8 and PPCHeatPctBig 100 (100 mm = 77%, 300 mm = 100% of the PPC's own limit per shot); 16.2: PPCEnergySmall 500 and PPCEnergyBig 200000, the PPCHeat... knobs (the PPC heats itself), the PPCFire... knobs (its fire sound) and HeatIgniteClasses holds acf_ppc).
+-- Everything else is the shipped 16.9 value (RadFlushKJPerLiter 125000 is the shipped one; the six player limits are 40: capacitor, generator, radiator, lazer, PPC and fusion engine). 16.9 changed: the FUSION ENGINE WAS REBUILT (one rated-power SLIDER, FusionHPMin 250 to FusionHPMax 6500 hp, instead of two fixed sizes: FusionTypes, FusionTypeDefault, FusionDrawDefault and FusionDrawMax are gone and the Fusion... knobs and helpers are new; FusionHeatScalar is 0.25), PPCEnergySmall 1000 / 3 and PPCEnergyBig 400000 / 3 (a third less energy per shot: the blast is made from that energy, so its filler is 2/3 of what it was; PPCBlastScalar 1.5 gives the old blast back) and the new PPCBallBigMult 1.2 (the 300 mm ball is 1.2 times bigger than the straight scaling of the 50 mm ball). 16.8 changed: PPCMassMin 255 (was 120: a 50 mm PPC weighs 355 kg, was 222), the EntityLimitsFromConfig knob of 16.7 is gone (nothing sets the limits from the config any more: your server settings do), and the first fusion engines (rebuilt in 16.9). 16.7 changed: PPCPropDamageScalar 20 (was 1: 20 times the ACF damage at the SAME blast radius, which PPCBlastScalar sets) and PPCHeatPerDamage 30000 (was 1000000: 20 x 30000 = 0.6 x the 16.6 blast heat). 16.6 changed: the smallest PPC is 50 mm (PPCCaliberMin 50; the new PPCCurveStart 20 keeps every number at 50 mm and above where it was); the PPC blast now heats only the parts it DAMAGES, in proportion to the damage (the new PPCHeatPerDamage and PPCHeatMaxPct 300 replace PPCHeatScalar and PPCHeatRadiusMult); the new HeatCheck... knobs belong to the Heat Checker tool (HeatCheckInterval, the lazers' own overheat check, is not one of them and is still 0.1). 16.5: PPCHeatPctSmall 67.8 and PPCHeatPctBig 100 (100 mm = 77%, 300 mm = 100% of the PPC's own limit per shot); 16.2: the PPCHeat... knobs (the PPC heats itself), the PPCFire... knobs (its fire sound) and HeatIgniteClasses holds acf_ppc).
 -- =========================================================================
 
 if SERVER then AddCSLuaFile() end
@@ -408,28 +422,66 @@ table.Merge(ACFLazers.Config, {
     GenHealthMult      = 1,     -- multiplier on the health ACF works out from the surface area
     GenMaxPerPlayer    = 40,    -- [CHANGED 19] (15.7: was 10) default for the server variable sbox_maxacf_generators
 
-    -- ===================== FUSION ENGINES ===================== [CHANGED 30] (16.8)
-    -- WHAT IT IS. A self-powered energy source: nothing to link to it but capacitors. It is linked to capacitors with the link tools exactly like a generator hub (right-click the fusion engine, then the
-    -- capacitor), and it makes kJ every moment and shares them out into the free room of the whole capacitor group (the generator's water-fill). A capacitor with AllowCharge off takes nothing, and a full
-    -- group stops it. Two sizes, picked with the Fusion tool. Their power is written as the hp of a GENERATOR that would make the same energy:
-    --     kJ per second = hp x GenKJPerHP (5.2) x the health efficiency (1 at full health down to GenDamagedEfficiency at 0%) x the Draw input
-    -- so the large engine (6500 hp) makes 33,800 kJ/s and the small one (250 hp) 1,300 kJ/s, and changing GenKJPerHP changes the fusion engines with the generators. A 60-unit capacitor (203,575 kJ)
-    -- fills in 6.0 s from the large one and in 157 s from the small one.
-    FusionModel         = "models/lasers/fusion.mdl", -- the model. If the file is missing the fusion engine refuses to spawn and says so. Both sizes use it, scaled
-    FusionTypes         = {   -- the sizes, in the order the tool lists them: id (what a dupe and the tool store), name (hover text, undo list), mass (kg), scale (the model's scale), hp (the generator-equivalent power)
-        { id = "large", name = "Large Fusion Engine", mass = 10000, scale = 1,    hp = 6500 },
-        { id = "small", name = "Small Fusion Engine", mass = 1500,  scale = 0.25, hp = 250 },
-    },
-    FusionTypeDefault   = "large",  -- the size the tool starts with, and what a dupe or a console command with an unknown size becomes
-    FusionDrawDefault   = 100,      -- what the Draw input counts as while nothing is wired to it (100 = make everything it can, like AllowCharge counting as on)
-    FusionDrawMax       = 100,      -- the Draw input value that means "all" (the wire value is clamped to 0 .. this)
-    FusionHeatScalar    = 0,        -- kJ of heat the engine gets per kJ it makes. 0 = it makes no heat (the shipped value: not asked for). 1 = like a generator hub (HeatGenSmall / HeatGenBig are 1). It holds heat like any part
+    -- ===================== FUSION ENGINES ===================== [CHANGED 30] (16.8) [CHANGED 31] (16.9: rebuilt around a slider, an operating percent, health, heat and a charge)
+    -- WHAT IT IS. A self-powered energy source that only capacitors link to (right-click the engine, then the capacitor: the same link tools as a generator hub). The Fusion tool has ONE SLIDER: the rated
+    -- power in hp, FusionHPMin .. FusionHPMax, written as the hp of a GENERATOR hub that would make the same energy. Every number that has a "Small" and a "Big" below goes on a STRAIGHT LINE over that slider
+    -- (the smallest end of the slider uses the Small number, the biggest end the Big number):
+    --                                  slider 250 hp    slider 6500 hp
+    --       mass                        1,500 kg         10,000 kg
+    --       model scale                 0.25             1
+    --       spin-up, 0 -> 100%          8 s              15 s
+    --       longest wait after a PPC    3 s              5 s            (the shortest wait is FusionPPCDelayMin, 1 s, for both)
+    --       how hard a PPC hits it      x1.0             x0.5           (FusionPPCScalar, see below)
+    -- ENERGY. kJ per second = rated hp x GenKJPerHP (5.2) x the OPERATING PERCENT, shared out (the generator's water-fill) into the free room of the whole capacitor group it is linked to. 6500 hp at 100% =
+    -- 33,800 kJ/s, 250 hp = 1,300 kJ/s. Nothing is made (and no heat) while the capacitors have no room, while their AllowCharge is off, or while the engine is NOT PARENTED (FusionNeedsParent: an engine that is
+    -- not parented to something will not run at all, so a vehicle that is still being spawned in or built cannot blow up: a pasted dupe has to be parented first).
+    -- OPERATING PERCENT. The Active wire input (nothing wired = FusionActiveDefault) switches it on. While on, the operating percent climbs from where it is toward its CEILING at 1 / spin-up per second (8 s for the
+    -- smallest, 15 s for the biggest, 0 -> 100%). The ceiling is the engine's EFFICIENCY: the health efficiency (1 at full health, FusionDamagedEfficiency at 0%) times the heat efficiency (1 up to
+    -- FusionHeatEffStart of the critical heat, falling in a straight line to FusionHeatEffAtCritical at the critical heat). Switched off, it falls at FusionSpinDownMult times the spin-up rate. Over its ceiling (damage
+    -- or heat) it falls toward the ceiling the same way.
+    -- PPC HITS. When a PPC detonates within FusionPPCRange units of the engine, the operating percent is CUT at once by (the PPC's heat percent per shot, GetPPCHeatPct, as a fraction: 67.8% for a 50 mm, 100%
+    -- for a 300 mm) x the engine's PPC scalar x FusionPPCCutMult; it cannot grow again for a random time between FusionPPCDelayMin and the engine's longest wait (a new hit in the meantime rolls a new wait), and then
+    -- climbs back at its normal spin-up rate toward its ceiling. A protected (safezone) engine is not touched.
+    -- HEAT. Every kJ the engine really puts into the capacitors heats ITSELF by FusionHeatScalar kJ (0.25 = a quarter). It holds heat like any part (mass x HeatSpecificHeat) and cools by itself. At FusionCriticalF
+    -- (Fahrenheit) it is at its critical heat: it DETONATES (unless it is in a safezone: a safezone engine cannot explode).
+    -- CHARGE. The energy it holds inside. It follows the operating percent up (charge = operating percent x rated kJ/s x FusionChargeSeconds) but only drains slowly when the operating percent falls (the whole store in
+    -- FusionChargeDrainSeconds), so switching it off, a PPC hit or a spin-down does not empty it at once. When the engine explodes (critical heat, or destroyed) the charge becomes an ACF explosion: filler kg =
+    -- charge kJ x FusionBlastMult / ACF.HEPower (the capacitor's rule). An engine in a safezone, or with no charge, does not hurt anything.
+    FusionModel         = "models/lasers/fusion.mdl", -- the model. If the file is missing the fusion engine refuses to spawn and says so. Scaled by the slider
+    FusionHPMin         = 250,    -- smallest rated power the slider makes (hp of a generator hub)
+    FusionHPMax         = 6500,   -- biggest rated power (hp)
+    FusionHPDefault     = 6500,   -- where the slider starts
+    FusionMassSmall     = 1500,   -- kg at FusionHPMin
+    FusionMassBig       = 10000,  -- kg at FusionHPMax
+    FusionScaleSmall    = 0.25,   -- model scale at FusionHPMin
+    FusionScaleBig      = 1,      -- model scale at FusionHPMax
+    FusionSpinUpSmall   = 8,      -- seconds from 0 to 100% operating at FusionHPMin
+    FusionSpinUpBig     = 15,     -- seconds from 0 to 100% operating at FusionHPMax
+    FusionSpinDownMult  = 1,      -- how fast the operating percent falls when it is switched off (or over its ceiling), as a multiple of the spin-up rate. 1 = as fast as it climbs, 2 = twice as fast
+    FusionActiveDefault = 1,      -- what the Active input counts as while nothing is wired to it: 1 = on, 0 = off [GUESS: on, like AllowCharge and the old Draw input]
+    FusionNeedsParent   = 1,      -- 1 = the engine only runs (and only makes energy and heat) while it is parented to something (the GMod parent tool). 0 = it does not matter
+    FusionPPCRange      = 300,    -- units. A PPC that detonates this close to the engine cuts its operating percent
+    FusionPPCCutMult    = 1,      -- multiplier on every PPC cut (on top of the engine's own scalar below)
+    FusionPPCScalarSmall = 1,     -- how hard a PPC hits the engine at FusionHPMin ([GUESS]: the cut is the PPC's percent per shot x this)
+    FusionPPCScalarBig  = 0.5,    -- ... and at FusionHPMax ([GUESS])
+    FusionPPCDelayMin   = 1,      -- seconds: the shortest time after a PPC hit before the operating percent may grow again (both ends of the slider)
+    FusionPPCDelayMaxSmall = 3,   -- seconds: the longest of that wait at FusionHPMin (a random time between FusionPPCDelayMin and this)
+    FusionPPCDelayMaxBig = 5,     -- seconds: ... and at FusionHPMax
+    FusionHeatScalar    = 0.25,   -- kJ of heat the engine gets per kJ it puts into the capacitors (a quarter). 0 = no heat
+    FusionCriticalF     = 1500,   -- degrees Fahrenheit. The critical heat: the engine detonates there. (A plate is HOT at HeatHotF, 1100 F.)
+    FusionHeatEffStart  = 0.5,    -- [GUESS] share of the critical heat (kelvin above room temperature) up to which the heat efficiency is still 1 ("low heat")
+    FusionHeatEffAtCritical = 0.5, -- [GUESS] the heat efficiency AT the critical heat (a straight line from 1 at FusionHeatEffStart). 0 would stop it dead there, so it could never reach the critical heat by itself
+    FusionDamagedEfficiency = 0.5, -- the health efficiency at 0% health (1 at 100%, a straight line between)
+    FusionChargeSeconds = 10,     -- [GUESS] the charge at 100% operating is this many seconds of the engine's full output, in kJ (6500 hp: 338,000 kJ = 42 kg of HE; 250 hp: 13,000 kJ = 1.6 kg)
+    FusionChargeDrainSeconds = 60, -- [GUESS] seconds for a FULL charge to drain away when the operating percent is not holding it up
+    FusionBlastMult     = 1,      -- 1 = the charge becomes HE at ACF's rate (kJ / ACF.HEPower kg). Raise it for bigger bangs
+    FusionBlastMinKJ    = 0.1,    -- kJ. A floor so an engine with no charge still pops a tiny bit (never exactly 0), like the capacitor's CapReleaseMinKJ
     FusionPowerSmoothing = 0.4,     -- seconds. Time constant of the smoothing of the energy reading (wire output, hover text)
-    FusionMaxDeltaTime  = 0.25,     -- seconds. Longest "time since the last pass" it will make energy for (a lag spike cannot hand out a huge pile at once)
+    FusionMaxDeltaTime  = 0.25,     -- seconds. Longest "time since the last pass" it will run for (a lag spike cannot hand out a huge pile at once)
     FusionThinkInterval = 0.1,      -- seconds between its passes
     FusionOutputInterval = 0.25,    -- seconds between refreshes of the wire outputs and the hover text
     FusionToolCapSize   = 60,       -- the fusion tool quotes "fills a capacitor this big in N seconds" for this capacitor size (a display number only: changes nothing in the game)
-    FusionArmourAtOne   = 40,       -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod): 10 mm for the small one
+    FusionArmourAtOne   = 40,       -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod): 10 mm for the smallest
     FusionHealthMult    = 1,        -- multiplier on the health ACF works out from the surface area
     FusionMaxPerPlayer  = 40,       -- default for the server variable sbox_maxacf_fusions (how many fusion engines one player may have). Like the other four it is only a DEFAULT: set the variable on the server
 
@@ -669,8 +721,8 @@ table.Merge(ACFLazers.Config, {
 
     -- ENERGY PER SHOT, in kJ. The size curve: PPCEnergyCurve 0 = a straight line, 1 = fully exponential, in between = a mix (the same shape rule as LazerDrawCurve). Damage follows the energy: the more a shot
     -- costs, the more HE it is, so the damage grows with the size the way the lazer's draw does.
-    PPCEnergySmall    = 500,    -- [CHANGED 24] (16.2: was 200) kJ one shot of the PPCCurveStart (20 mm, the start of the curve) costs: the lazer's 100 kJ/s times 5
-    PPCEnergyBig      = 200000, -- [CHANGED 24] (16.2: was 80000) kJ one shot of the biggest PPC (PPCCaliberMax) costs: the lazer's 40000 kJ/s times 5. (The biggest capacitor holds 203575 kJ: one shot and a little over)
+    PPCEnergySmall    = 1000 / 3, -- [CHANGED 32] (16.9: was 500, 16.2: was 200) kJ one shot of the PPCCurveStart (20 mm, the start of the curve) costs: 333.3 (two thirds of 16.8's 500)
+    PPCEnergyBig      = 400000 / 3, -- [CHANGED 32] (16.9: was 200000, 16.2: was 80000) kJ one shot of the biggest PPC (PPCCaliberMax) costs: 133,333 (two thirds of 16.8's 200000; the biggest capacitor holds 203575 kJ)
     PPCEnergyCurve    = 0.75,   -- like LazerDrawCurve. Clamped to 0 .. 1
 
     -- THE PROJECTILE. Speed: PPCSpeedSmall at the smallest PPC, PPCSpeedBig at the biggest, a straight line between (metres per second).
@@ -682,7 +734,9 @@ table.Merge(ACFLazers.Config, {
     -- The SIZE is set in units across, not as a model scale, so changing the model later does not change how big the ball is: scale = PPCBallDiameter / PPCBallModelDiameter.
     PPCBallModel      = "models/sprops/geometry/sphere_3.mdl",
     PPCBallMaterial   = "models/effects/comball_sphere", -- [GUESS] the combine ball's glowing sphere material (every GMod has it). "" = no material over the model
-    PPCBallDiameter   = 10,     -- units across, the flying ball at PPCCaliberBase (100 mm); other sizes in proportion (50 mm: half of it, 300 mm: three times)
+    PPCBallDiameter   = 10,     -- units across, the flying ball at PPCCaliberBase (100 mm); other sizes in proportion (50 mm: half of it = 5 units, 300 mm: three times = 30) ... times PPCBallBigMult below
+    PPCBallBigMult    = 1.2,    -- [CHANGED 31] (16.9) extra size at the biggest PPC: the ball is multiplied by 1 at PPCCaliberMin (50 mm) rising on a straight line to this at PPCCaliberMax (300 mm), so the 300 mm ball is
+    --                            1.2 x larger than the 6 x scale of 50 -> 300 mm suggests: 36 units across instead of 30 (50 mm 5, 100 mm 10.4, 150 mm 15.9, 200 mm 21.6, 300 mm 36). 1 = plain proportion (the 16.8 sizes)
     PPCBallModelDiameter = 3,   -- [GUESS] units across the model itself at scale 1 (an SProps "sphere_3" is 3 across). If the ball is the wrong size, measure the model and put its real width here
 
     -- THE EXPLOSION. HE filler (kg) = kJ of the shot x PPCBlastScalar / ACF.HEPower. The blast radius and power are ACF's own for that filler.
@@ -707,7 +761,7 @@ table.Merge(ACFLazers.Config, {
     --    50 mm          0.018      0.002    0.0004                        0.030      0.003    0.0007
     -- (The blast's damage hardly grows with the caliber: a bigger shot reaches further and pushes through a little more armour. The 16.1 heat followed the shot's energy instead.) Tune PPCHeatPerDamage with
     -- the heat checker tool (look at what the blast did) and the "blast" toy (lz_toy blast prints the damage and heat of a part you describe, at each distance).
-    PPCHeatPerDamage  = 30000,  -- [CHANGED 29] (16.7: was 1000000, with a damage scalar of 1) kJ of heat per point of ACF damage the blast does to a part. 16.7 does 20 times the damage and wants 0.6 times the 16.6 heat: 20 x 30000 = 0.6 x 1000000. So the default still makes a 50 mm-armoured part at 5% of a 100 mm blast's radius get about 10,800 kJ (16.6: 18,000) and a 20 mm one 67,200 (16.6: 112,000), before the cap. Change PPCPropDamageScalar and this moves with it: heat = damage (after the scalar) x this. 0 = the blast gives no heat
+    PPCHeatPerDamage  = 30000,  -- [CHANGED 29] (16.7: was 1000000, with a damage scalar of 1) kJ of heat per point of ACF damage the blast does to a part. 16.7 does 20 times the damage and wants 0.6 times the 16.6 heat: 20 x 30000 = 0.6 x 1000000. So the default still makes a 50 mm-armoured part at 5% of a 100 mm blast's radius get about 9,900 kJ (16.8: 10,800; 16.6: 18,000) and a 20 mm one 61,700 (16.8: 67,200; 16.6: 112,000), before the cap. (16.9: a shot costs two thirds of what it did, and the blast follows the shot, so these fell.) Change PPCPropDamageScalar and this moves with it: heat = damage (after the scalar) x this. 0 = the blast gives no heat
     PPCHeatMaxPct     = 300,     -- [CHANGED 28] percent of the heat that takes a part from room temperature to the HOT temperature (HeatHotF) that ONE blast may give it: 300 = at most three times as hot as HOT. 0 = no cap (a light thin prop can get tens of thousands of kelvin)
 
     -- FIRING. A shot is released when Fire goes from 0 to above 0, if the pool holds the shot's energy and the PPC is not still cooling.
@@ -1341,8 +1395,8 @@ end
 local PPCNumberDefaults = {
     PPCCaliberMin = 50, PPCCurveStart = 20, PPCCaliberMax = 300, PPCCaliberBase = 100,
     PPCMassMin = 255, PPCMassMax = 9000, PPCMassExponent = 2, PPCArmourMult = 0.5, PPCHealthMult = 1,
-    PPCEnergySmall = 500, PPCEnergyBig = 200000, PPCEnergyCurve = 0.75,
-    PPCSpeedSmall = 600, PPCSpeedBig = 800, PPCLifetime = 7, PPCDamageAtEnd = 0.8, PPCBallDiameter = 10, PPCBallModelDiameter = 3,
+    PPCEnergySmall = 1000 / 3, PPCEnergyBig = 400000 / 3, PPCEnergyCurve = 0.75,
+    PPCSpeedSmall = 600, PPCSpeedBig = 800, PPCLifetime = 7, PPCDamageAtEnd = 0.8, PPCBallDiameter = 10, PPCBallModelDiameter = 3, PPCBallBigMult = 1.2,
     PPCBlastScalar = 1, PPCPropDamageScalar = 20, PPCFragmentScalar = 0, PPCFragMassRatio = 0.5, PPCBlastBackoff = 4, PPCHeatPerDamage = 30000, PPCHeatMaxPct = 300,
     PPCRefireSeconds = 1, PPCMaxPerPlayer = 40,
     PPCHeatPctSmall = 67.8, PPCHeatPctBig = 100, PPCHeatCapF = 900, PPCHeatDamage = 4, PPCHeatExplodeChance = 0.8, PPCHeatExplosionMult = 1 / 3,
@@ -1477,9 +1531,18 @@ function ACFLazers.GetPPCDamageMult(age)
     return Lerp(f, 1, math.max(ACFLazers.PPCNumber("PPCDamageAtEnd"), 0))
 end
 
---- The model scale of the flying ball for a caliber: PPCBallDiameter units across at PPCCaliberBase (in proportion at other sizes), over the model's own width at scale 1 (PPCBallModelDiameter).
+--- [CHANGED 31] (16.9) The extra size of the flying ball at a caliber: 1 at PPCCaliberMin, PPCBallBigMult at PPCCaliberMax, a straight line between (a caliber outside the range counts as the nearest end).
+function ACFLazers.GetPPCBallMult(caliber)
+    local low  = ACFLazers.PPCNumber("PPCCaliberMin")
+    local high = ACFLazers.PPCNumber("PPCCaliberMax")
+    local t    = math.Clamp((ACFLazers.ClampNumber(caliber, low, low, math.huge) - low) / math.max(high - low, 1e-6), 0, 1)
+
+    return Lerp(t, 1, math.max(ACFLazers.PPCNumber("PPCBallBigMult"), 0))
+end
+
+--- The model scale of the flying ball for a caliber: PPCBallDiameter units across at PPCCaliberBase (in proportion at other sizes, times GetPPCBallMult), over the model's own width at scale 1 (PPCBallModelDiameter).
 function ACFLazers.GetPPCBallScale(caliber)
-    return ACFLazers.GetPPCScale(caliber) * math.max(ACFLazers.PPCNumber("PPCBallDiameter"), 0) / math.max(ACFLazers.PPCNumber("PPCBallModelDiameter"), 0.0001)
+    return ACFLazers.GetPPCScale(caliber) * math.max(ACFLazers.PPCNumber("PPCBallDiameter"), 0) / math.max(ACFLazers.PPCNumber("PPCBallModelDiameter"), 0.0001) * ACFLazers.GetPPCBallMult(caliber)
 end
 
 --- [CHANGED 28] (16.6) kJ of heat a part gets from a PPC blast that did it `damage` points of ACF damage: damage x PPCHeatPerDamage, but never more than PPCHeatMaxPct percent of the heat that takes a part of
@@ -2193,21 +2256,22 @@ function ACFLazers.GetGenReadout(hp)
     }
 end
 
--- ===================== FUSION ENGINE HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 30]
+-- ===================== FUSION ENGINE HELPERS (pure maths: nothing here touches the game) ===================== [CHANGED 30] [CHANGED 31]
 
 -- The numbers a config without the fusion lines uses (a test keeps them equal to the knobs written above).
 local FusionNumberDefaults = {
-    FusionDrawDefault = 100, FusionDrawMax = 100, FusionHeatScalar = 0, FusionPowerSmoothing = 0.4, FusionMaxDeltaTime = 0.25, FusionThinkInterval = 0.1,
-    FusionOutputInterval = 0.25, FusionToolCapSize = 60, FusionArmourAtOne = 40, FusionHealthMult = 1, FusionMaxPerPlayer = 40,
-}
-
-local FusionTypesDefault = {
-    { id = "large", name = "Large Fusion Engine", mass = 10000, scale = 1,    hp = 6500 },
-    { id = "small", name = "Small Fusion Engine", mass = 1500,  scale = 0.25, hp = 250 },
+    FusionHPMin = 250, FusionHPMax = 6500, FusionHPDefault = 6500,
+    FusionMassSmall = 1500, FusionMassBig = 10000, FusionScaleSmall = 0.25, FusionScaleBig = 1,
+    FusionSpinUpSmall = 8, FusionSpinUpBig = 15, FusionSpinDownMult = 1, FusionActiveDefault = 1, FusionNeedsParent = 1,
+    FusionPPCRange = 300, FusionPPCCutMult = 1, FusionPPCScalarSmall = 1, FusionPPCScalarBig = 0.5,
+    FusionPPCDelayMin = 1, FusionPPCDelayMaxSmall = 3, FusionPPCDelayMaxBig = 5,
+    FusionHeatScalar = 0.25, FusionCriticalF = 1500, FusionHeatEffStart = 0.5, FusionHeatEffAtCritical = 0.5, FusionDamagedEfficiency = 0.5,
+    FusionChargeSeconds = 10, FusionChargeDrainSeconds = 60, FusionBlastMult = 1, FusionBlastMinKJ = 0.1,
+    FusionPowerSmoothing = 0.4, FusionMaxDeltaTime = 0.25, FusionThinkInterval = 0.1, FusionOutputInterval = 0.25,
+    FusionToolCapSize = 60, FusionArmourAtOne = 40, FusionHealthMult = 1, FusionMaxPerPlayer = 40,
 }
 
 ACFLazers.FusionNumberDefaults = FusionNumberDefaults
-ACFLazers.FusionTypesDefault   = FusionTypesDefault
 
 --- A fusion number: the config's, or the default when the config has no real number there.
 function ACFLazers.FusionNumber(name)
@@ -2227,95 +2291,182 @@ function ACFLazers.GetFusionModel()
     return "models/lasers/fusion.mdl"
 end
 
--- A usable size entry: an id (text), and a mass and a scale above 0, and a power of 0 or more, all real numbers.
-local function FusionTypeUsable(t)
-    if type(t) ~= "table" or type(t.id) ~= "string" or t.id == "" then return false end
+--- A rated power coming from the tool, a dupe or a console command, made safe: a whole number of hp between FusionHPMin and FusionHPMax (anything that is not a number becomes FusionHPDefault).
+function ACFLazers.ClampFusionHP(hp)
+    local low  = ACFLazers.FusionNumber("FusionHPMin")
+    local high = math.max(ACFLazers.FusionNumber("FusionHPMax"), low)
 
-    for _, key in ipairs({ "mass", "scale", "hp" }) do
-        local v = tonumber(t[key])
-
-        if not v or v ~= v or v == math.huge or v == -math.huge then return false end
-    end
-
-    return tonumber(t.mass) > 0 and tonumber(t.scale) > 0 and tonumber(t.hp) >= 0
+    return math.Round(ACFLazers.ClampNumber(hp, ACFLazers.FusionNumber("FusionHPDefault"), low, high))
 end
 
---- The sizes the tool offers, in order: the config's FusionTypes without the unusable entries, or the two built-in sizes when none is usable. Each entry has id, name, mass, scale, hp as real values.
-function ACFLazers.GetFusionTypes()
-    local list = ACFLazers.Config.FusionTypes
-    local out  = {}
+--- Where a rated power sits on the slider: 0 at FusionHPMin ... 1 at FusionHPMax. Every "Small .. Big" pair is a straight line over this.
+function ACFLazers.GetFusionSlider(hp)
+    local low  = ACFLazers.FusionNumber("FusionHPMin")
+    local high = ACFLazers.FusionNumber("FusionHPMax")
 
-    if type(list) == "table" then
-        for _, t in ipairs(list) do
-            if FusionTypeUsable(t) then
-                out[#out + 1] = { id = t.id, name = type(t.name) == "string" and t.name ~= "" and t.name or t.id, mass = tonumber(t.mass), scale = tonumber(t.scale), hp = tonumber(t.hp) }
-            end
-        end
-    end
-
-    if #out == 0 then return FusionTypesDefault end
-
-    return out
+    return math.Clamp((ACFLazers.ClampFusionHP(hp) - low) / math.max(high - low, 1e-6), 0, 1)
 end
 
---- A size id coming from the tool, a dupe or a console command, made safe: itself when it is one of the sizes, else FusionTypeDefault when that is one, else the first size.
-function ACFLazers.ClampFusionType(id)
-    local list = ACFLazers.GetFusionTypes()
-
-    for _, t in ipairs(list) do
-        if t.id == id then return t.id end
-    end
-
-    local default = ACFLazers.Config.FusionTypeDefault
-
-    for _, t in ipairs(list) do
-        if t.id == default then return t.id end
-    end
-
-    return list[1].id
+--- Model scale for a rated power: FusionScaleSmall .. FusionScaleBig on a straight line.
+function ACFLazers.GetFusionScale(hp)
+    return Lerp(ACFLazers.GetFusionSlider(hp), ACFLazers.FusionNumber("FusionScaleSmall"), ACFLazers.FusionNumber("FusionScaleBig"))
 end
 
---- The entry of a size (after ClampFusionType, so it always exists).
-function ACFLazers.GetFusionType(id)
-    id = ACFLazers.ClampFusionType(id)
-
-    for _, t in ipairs(ACFLazers.GetFusionTypes()) do
-        if t.id == id then return t end
-    end
+--- Mass (kg) for a rated power: FusionMassSmall .. FusionMassBig on a straight line.
+function ACFLazers.GetFusionMass(hp)
+    return math.max(Lerp(ACFLazers.GetFusionSlider(hp), ACFLazers.FusionNumber("FusionMassSmall"), ACFLazers.FusionNumber("FusionMassBig")), 1)
 end
 
---- kJ per second a fusion engine makes: the hp of its size x GenKJPerHP x the health efficiency (GetGenEfficiency: 1 at full health, GenDamagedEfficiency at none) x draw (0..1, the Draw input as a share).
-function ACFLazers.GetFusionRate(id, health, draw)
-    draw = ACFLazers.ClampNumber(draw, 1, 0, 1)
-
-    return ACFLazers.GetFusionType(id).hp * ACFLazers.Config.GenKJPerHP * ACFLazers.GetGenEfficiency(health) * draw
+--- Seconds from 0 to 100% operating: FusionSpinUpSmall .. FusionSpinUpBig on a straight line (never under a hundredth of a second).
+function ACFLazers.GetFusionSpinUp(hp)
+    return math.max(Lerp(ACFLazers.GetFusionSlider(hp), ACFLazers.FusionNumber("FusionSpinUpSmall"), ACFLazers.FusionNumber("FusionSpinUpBig")), 0.01)
 end
 
---- Everything the fusion tool shows for a size: the energy per second the engine makes at full health and with no health left, and how long that takes to fill the reference capacitor (FusionToolCapSize).
+--- How much the operating percent climbs per second (as a fraction of 100%).
+function ACFLazers.GetFusionSpinRate(hp)
+    return 1 / ACFLazers.GetFusionSpinUp(hp)
+end
+
+--- kJ per second at 100% operating: the rated hp x GenKJPerHP (the generator's own scalar).
+function ACFLazers.GetFusionRatedRate(hp)
+    return ACFLazers.ClampFusionHP(hp) * ACFLazers.Config.GenKJPerHP
+end
+
+--- kJ per second the engine makes at this operating percent (a fraction 0..1; junk counts as 0).
+function ACFLazers.GetFusionRate(hp, operating)
+    return ACFLazers.GetFusionRatedRate(hp) * ACFLazers.ClampNumber(operating, 0, 0, 1)
+end
+
+--- kJ the engine holds at 100% operating: FusionChargeSeconds of its full output.
+function ACFLazers.GetFusionChargeMax(hp)
+    return ACFLazers.GetFusionRatedRate(hp) * math.max(ACFLazers.FusionNumber("FusionChargeSeconds"), 0)
+end
+
+--- How hard a PPC hits an engine of this size: FusionPPCScalarSmall .. FusionPPCScalarBig on a straight line.
+function ACFLazers.GetFusionPPCScalar(hp)
+    return Lerp(ACFLazers.GetFusionSlider(hp), ACFLazers.FusionNumber("FusionPPCScalarSmall"), ACFLazers.FusionNumber("FusionPPCScalarBig"))
+end
+
+--- How much operating percent (a fraction 0..1) one PPC of this caliber (mm) takes off an engine of this rated power: the PPC's heat percent per shot (GetPPCHeatPct) as a fraction x the engine's
+--- PPC scalar x FusionPPCCutMult. Never under 0 and never over 1 (the whole of it).
+function ACFLazers.GetFusionPPCCut(caliber, hp)
+    local cut = ACFLazers.GetPPCHeatPct(ACFLazers.ClampPPCCaliber(caliber)) / 100 * ACFLazers.GetFusionPPCScalar(hp) * ACFLazers.FusionNumber("FusionPPCCutMult")
+
+    return math.Clamp(cut, 0, 1)
+end
+
+--- The longest wait (seconds) after a PPC hit for an engine of this rated power: FusionPPCDelayMaxSmall .. FusionPPCDelayMaxBig on a straight line (never under FusionPPCDelayMin).
+function ACFLazers.GetFusionRecoveryMax(hp)
+    return math.max(Lerp(ACFLazers.GetFusionSlider(hp), ACFLazers.FusionNumber("FusionPPCDelayMaxSmall"), ACFLazers.FusionNumber("FusionPPCDelayMaxBig")), ACFLazers.FusionNumber("FusionPPCDelayMin"))
+end
+
+--- The wait (seconds) after a PPC hit: `roll` (0..1, a random number from the caller) picks a time between FusionPPCDelayMin and the engine's longest wait.
+function ACFLazers.GetFusionRecoveryDelay(hp, roll)
+    return Lerp(ACFLazers.ClampNumber(roll, 0, 0, 1), ACFLazers.FusionNumber("FusionPPCDelayMin"), ACFLazers.GetFusionRecoveryMax(hp))
+end
+
+--- Energy multiplier from the engine's health. health = ACF health as a fraction of max health (0..1): 1 at full health, FusionDamagedEfficiency at none.
+function ACFLazers.GetFusionHealthEfficiency(health)
+    health = tonumber(health) or 1
+
+    if health ~= health then health = 1 end -- NaN counts as undamaged
+
+    return Lerp(math.Clamp(health, 0, 1), math.Clamp(ACFLazers.FusionNumber("FusionDamagedEfficiency"), 0, 1), 1)
+end
+
+--- Energy multiplier from the engine's heat. heat = how far above room temperature as a fraction of the critical heat (0 = cold, 1 = critical). 1 up to FusionHeatEffStart, then a straight line down
+--- to FusionHeatEffAtCritical at the critical heat; hotter than that stays at that number.
+function ACFLazers.GetFusionHeatEfficiency(heat)
+    heat = tonumber(heat) or 0
+
+    if heat ~= heat then heat = 0 end
+
+    local start = math.Clamp(ACFLazers.FusionNumber("FusionHeatEffStart"), 0, 0.999)
+    local floor = math.Clamp(ACFLazers.FusionNumber("FusionHeatEffAtCritical"), 0, 1)
+
+    if heat <= start then return 1 end
+    if heat >= 1 then return floor end
+
+    return Lerp((heat - start) / (1 - start), 1, floor)
+end
+
+--- The engine's efficiency = its CEILING for the operating percent: the health efficiency times the heat efficiency (1 = "100% efficiency": full health and low heat).
+function ACFLazers.GetFusionEfficiency(health, heat)
+    return ACFLazers.GetFusionHealthEfficiency(health) * ACFLazers.GetFusionHeatEfficiency(heat)
+end
+
+--- The critical heat, in kelvin above room temperature (FusionCriticalF).
+function ACFLazers.GetFusionRiseCritical()
+    return ACFLazers.GetHeatRiseK(ACFLazers.FusionNumber("FusionCriticalF"))
+end
+
+--- One step of the operating percent (a fraction 0..1) over `dt` seconds. wantOn = switched on AND allowed to run; ceiling = the efficiency; canGrow = false while it waits out a PPC hit.
+---   switched off: falls at FusionSpinDownMult x the spin-up rate down to 0.   over its ceiling: falls the same way, down to the ceiling.   waiting: stays.   else climbs at the spin-up rate up to the ceiling.
+function ACFLazers.StepFusionOperating(operating, dt, hp, wantOn, ceiling, canGrow)
+    operating = ACFLazers.ClampNumber(operating, 0, 0, 1)
+    ceiling   = ACFLazers.ClampNumber(ceiling, 0, 0, 1)
+    dt        = ACFLazers.ClampNumber(dt, 0, 0, math.huge) -- (junk and NaN count as no time)
+
+    local up   = ACFLazers.GetFusionSpinRate(hp) * dt
+    local down = up * math.max(ACFLazers.FusionNumber("FusionSpinDownMult"), 0)
+
+    if not wantOn then return math.max(operating - down, 0) end
+    if operating > ceiling then return math.max(operating - down, ceiling) end
+    if not canGrow then return operating end
+
+    return math.min(operating + up, ceiling)
+end
+
+--- One step of the charge (kJ) over `dt` seconds: it follows the operating percent up at once (operating x the engine's full store), but only drains away at (the full store / FusionChargeDrainSeconds) per second.
+function ACFLazers.StepFusionCharge(charge, operating, hp, dt)
+    local most   = ACFLazers.GetFusionChargeMax(hp)
+    local held   = ACFLazers.ClampNumber(operating, 0, 0, 1) * most
+    local drain  = most / math.max(ACFLazers.FusionNumber("FusionChargeDrainSeconds"), 1e-3) * ACFLazers.ClampNumber(dt, 0, 0, math.huge)
+    local stored = ACFLazers.ClampNumber(charge, 0, 0, most)
+
+    return math.Clamp(math.max(stored - drain, held), 0, most)
+end
+
+--- HE filler (kg) of an exploding engine that holds `charge` kJ: charge x FusionBlastMult / ACF.HEPower, never under FusionBlastMinKJ worth.
+function ACFLazers.GetFusionBlastFiller(charge)
+    local C       = ACFLazers.Config
+    local hePower = (ACF and tonumber(ACF.HEPower)) or C.HeatHEPowerFallback
+
+    return math.max(ACFLazers.ClampNumber(charge, 0, -math.huge, math.huge), ACFLazers.FusionNumber("FusionBlastMinKJ")) * ACFLazers.FusionNumber("FusionBlastMult") / math.max(hePower, 1e-6)
+end
+
+--- Everything the fusion tool shows for a rated power (the slider): the energy per second at 100% operating, the size, the spin-up, the charge and the bang, and what a PPC does to it.
 --- Plain numbers, so the tool's panel, the toolgun screen and the tests all read the same thing.
-function ACFLazers.GetFusionReadout(id)
-    local C    = ACFLazers.Config
-    local t    = ACFLazers.GetFusionType(id)
-    local size = ACFLazers.FusionNumber("FusionToolCapSize")
+function ACFLazers.GetFusionReadout(hp)
+    local C        = ACFLazers.Config
+    local size     = ACFLazers.FusionNumber("FusionToolCapSize")
 
-    local rate     = ACFLazers.GetFusionRate(t.id, 1, 1)
-    local rateHurt = ACFLazers.GetFusionRate(t.id, 0, 1)
+    hp = ACFLazers.ClampFusionHP(hp)
+
+    local rate     = ACFLazers.GetFusionRatedRate(hp)
     local capacity = ACFLazers.GetCapCapacity(size)
+    local charge   = ACFLazers.GetFusionChargeMax(hp)
 
     return {
-        id                 = t.id,
-        name               = t.name,
-        hp                 = t.hp,
-        scale              = t.scale,
-        mass               = t.mass,
-        kjPerHP            = C.GenKJPerHP,
-        rate               = rate,                                   -- kJ/s at full health
-        rateDamaged        = rateHurt,                               -- kJ/s with no health left
-        efficiencyDamaged  = ACFLazers.GetGenEfficiency(0),
-        capSize            = size,
-        capacity           = capacity,                               -- kJ the reference capacitor holds
-        fillSeconds        = capacity / math.max(rate, 1e-6),        -- at full health
-        fillSecondsDamaged = capacity / math.max(rateHurt, 1e-6),
+        hp                = hp,
+        scale             = ACFLazers.GetFusionScale(hp),
+        mass              = ACFLazers.GetFusionMass(hp),
+        kjPerHP           = C.GenKJPerHP,
+        rate              = rate,                                      -- kJ/s at 100% operating
+        spinUp            = ACFLazers.GetFusionSpinUp(hp),             -- seconds 0 -> 100%
+        chargeMax         = charge,                                    -- kJ held at 100% operating
+        blastKg           = ACFLazers.GetFusionBlastFiller(charge),    -- kg of HE if it explodes at 100% operating
+        criticalF         = ACFLazers.FusionNumber("FusionCriticalF"),
+        heatScalar        = ACFLazers.FusionNumber("FusionHeatScalar"),
+        ppcScalar         = ACFLazers.GetFusionPPCScalar(hp),
+        ppcCutSmall       = ACFLazers.GetFusionPPCCut(ACFLazers.PPCNumber("PPCCaliberMin"), hp), -- operating percent a 50 mm PPC takes (a fraction)
+        ppcCutBig         = ACFLazers.GetFusionPPCCut(ACFLazers.PPCNumber("PPCCaliberMax"), hp), -- ... and a 300 mm one
+        recoveryMin       = ACFLazers.FusionNumber("FusionPPCDelayMin"),
+        recoveryMax       = ACFLazers.GetFusionRecoveryMax(hp),
+        efficiencyDamaged = ACFLazers.GetFusionHealthEfficiency(0),
+        capSize           = size,
+        capacity          = capacity,                                  -- kJ the reference capacitor holds
+        fillSeconds       = capacity / math.max(rate, 1e-6),           -- at 100% operating (after the spin-up)
     }
 end
 

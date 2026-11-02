@@ -1,21 +1,30 @@
 -- =========================================================================
 -- ACF FUSION ENGINE: SERVER FILE
--- NEW (16.8). Goes to:  lua/entities/acf_fusion/init.lua
---           NEEDS the new config (lua/autorun/acf_lazers_config.lua, 16.8) AND lua/autorun/acf_lazers_heat.lua: it refuses to load without them
+-- REBUILT (16.9). Goes to:  lua/entities/acf_fusion/init.lua   (on the SERVER, and in the game folder; restart the server after copying: a new entity folder is only read at start)
+--           NEEDS the 16.9 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua. Without them the engine is still REGISTERED with ACF, but refuses to spawn and says why.
+--           For the PPC to disturb engines, the 16.9 acf/entities/ammo_types/lazers_ppc.lua has to be on the server too.
 --
--- THE ACF FUSION ENGINE. A self-powered energy source for the capacitors. Two sizes (the Fusion tool picks one; FusionTypes in the config):
---     Large Fusion Engine   10,000 kg   model scale 1      the energy of a 6500 hp generator hub   (33,800 kJ/s)
---     Small Fusion Engine    1,500 kg   model scale 0.25   the energy of a  250 hp generator hub   ( 1,300 kJ/s)
+-- THE ACF FUSION ENGINE. A self-powered energy source for the capacitors. The Fusion tool has one SLIDER (the rated power in hp, 250 .. 6500, the hp of a generator hub that would make the same energy);
+-- the mass, the model scale, the spin-up time and the PPC numbers follow it on straight lines (see FUSION ENGINES in the config).
 --   * links:    fusion engine <-> capacitor, with the same link tools as a generator hub (right-click the engine, then the capacitor; reload unlinks). Nothing else links to it.
---               The capacitor sees it in its list of linked "generators" (the capacitor file is not changed).
---   * energy:   every pass it makes  hp x GenKJPerHP x health efficiency x Draw  kJ per second and shares them out with ACFLazers.WaterFill into the free room of the whole capacitor group
---               (like a dump). No room (or AllowCharge off on every capacitor with room) = nothing is made. Health efficiency: 1 at full health down to GenDamagedEfficiency at 0%, like a hub.
---   * wire:     input Draw (0 = make nothing ... 100 = make everything; unwired counts as FusionDrawDefault)
---               outputs Energy (kJ per second going into the capacitors), Rated (the generator-equivalent hp), MaxEnergy (kJ/s it could make now: its size, health and Draw),
---               Load (percent: Energy / MaxEnergy), Full (1 = the capacitors have no room), HeatKJ, HeatF, HeatPct
---   * heat:     FusionHeatScalar (0 as shipped) kJ of heat per kJ made; 0 = it makes no heat
+--   * parent:   it only runs while it is PARENTED to something (FusionNeedsParent): a vehicle that is still being spawned in or built cannot blow up. Not parented = operating 0, no energy, no heat.
+--   * wire:     input Active (nothing wired = FusionActiveDefault, on). Outputs: Energy, Rated, MaxEnergy, Load, Full, Operating (%), Efficiency (%), Charge (kJ), ChargePct, HeatKJ, HeatF, HeatPct, Parented
+--   * operating percent: switched on, it climbs from 0 to 100% in 8 s (smallest) .. 15 s (biggest), toward its CEILING = its efficiency (health efficiency x heat efficiency). Switched off it falls the same way.
+--   * energy:   kJ per second = hp x GenKJPerHP x operating percent, water-filled into the free room of the whole capacitor group (like a dump). No room = nothing is made and no heat.
+--   * heat:     FusionHeatScalar (0.25) kJ of heat per kJ it puts into the capacitors. At FusionCriticalF (1500 F) it DETONATES.
+--   * charge:   the energy it holds. Follows the operating percent up at once, drains away slowly (FusionChargeDrainSeconds) when the operating percent falls. It is the size of the bang when the engine
+--               explodes (critical heat, or destroyed): filler kg = charge kJ x FusionBlastMult / ACF.HEPower.
+--   * safezone: an engine inside a safezone (ACFLazers.IsProtectedBySafezone) cannot explode and is not touched by PPCs.
+--   * PPC:      a PPC that detonates within FusionPPCRange (300 units) cuts the operating percent at once (by the PPC's heat percent per shot x the engine's size scalar), the engine cannot grow again for a
+--               random 1 .. 3 s (smallest) / 1 .. 5 s (biggest) and then climbs back at its normal spin-up rate. The PPC announces its blast with the hook ACFLazers_PPCImpact (pos, caliber, bullet).
 -- All numbers live in lua/autorun/acf_lazers_config.lua (everything starting with Fusion...).
 -- =========================================================================
+
+local VERSION = "16.9"
+
+-- The first line this file prints. If the server console does NOT show it after a restart, the server never ran this file (the folder lua/entities/acf_fusion/ is not on the SERVER, or the file
+-- has a syntax error: the console shows one then).
+MsgN("[acf_fusion] init.lua version " .. VERSION .. " loaded")
 
 AddCSLuaFile("cl_init.lua")
 AddCSLuaFile("shared.lua")   -- ACF entities send shared.lua explicitly (see acf_gun/init.lua:10-11)
@@ -24,57 +33,69 @@ include("shared.lua")
 local ACF         = ACF
 local Contraption = ACF.Contraption
 local Entities    = ACF.Classes.Entities
+local Damage      = ACF.Damage
+local Objects     = Damage.Objects
 
-local CFG = ACFLazers and ACFLazers.Config
+local CFG  = ACFLazers and ACFLazers.Config
+local Heat = ACFLazers and ACFLazers.Heat
+
+-- WHAT IS MISSING (16.9). This file NEVER stops loading because of a missing config: the engine is registered with ACF whatever happens below, and a spawn with something missing says what it is
+-- (in the player's chat and the server console). In 16.8 a missing piece made this file return before the registration, which looks like "acf_fusion is not a registered ACF entity class".
+local NeedHelpers = {
+    "FusionNumber", "GetFusionModel", "ClampFusionHP", "GetFusionScale", "GetFusionMass", "GetFusionRatedRate", "GetFusionRate", "GetFusionChargeMax", "GetFusionPPCCut", "GetFusionRecoveryDelay",
+    "GetFusionEfficiency", "GetFusionRiseCritical", "StepFusionOperating", "StepFusionCharge", "GetFusionBlastFiller", "IsProtectedBySafezone", "WaterFill", "GetCapGroup", "GetHeatCapacity",
+}
+
+local Problem
 
 if not CFG then
-    ErrorNoHalt("[acf_fusion] ACFLazers.Config is missing. Is lua/autorun/acf_lazers_config.lua installed?\n")
-    return
+    Problem = "ACFLazers.Config is missing. Is lua/autorun/acf_lazers_config.lua installed on the SERVER?"
+elseif not (Heat and Heat.Add and Heat.GetPct) then
+    Problem = "the heat system is missing: copy lua/autorun/acf_lazers_heat.lua and the 16.9 lua/autorun/acf_lazers_config.lua to the SERVER, then restart."
+else
+    local missing = {}
+
+    for _, name in ipairs(NeedHelpers) do
+        if not ACFLazers[name] then missing[#missing + 1] = name end
+    end
+
+    if #missing > 0 then
+        Problem = "lua/autorun/acf_lazers_config.lua on the SERVER is older than this file (16.9): it has no " .. table.concat(missing, ", ") .. ". Copy the 16.9 config to the SERVER, then restart."
+    end
 end
 
-if not (ACFLazers.Heat and ACFLazers.Heat.Add and ACFLazers.GetHeatCapacity) then
-    ErrorNoHalt("[acf_fusion] the heat system is missing: copy lua/autorun/acf_lazers_heat.lua and the new lua/autorun/acf_lazers_config.lua, then restart.\n")
-    return
-end
-
-if not (ACFLazers.FusionNumber and ACFLazers.GetFusionModel and ACFLazers.GetFusionType and ACFLazers.ClampFusionType and ACFLazers.GetFusionRate and ACFLazers.GetFusionReadout) then
-    ErrorNoHalt("[acf_fusion] lua/autorun/acf_lazers_config.lua is older than this file (it has no fusion helpers). Copy the config of the same batch (16.8), then restart.\n")
-    return
-end
-
-local Heat = ACFLazers.Heat
-
-local VERSION = "16.8"
-MsgN("[acf_fusion] init.lua version " .. VERSION .. " loaded")
+if Problem then ErrorNoHalt("[acf_fusion] " .. Problem .. "\n") end
 
 -- How many fusion engines one player may own (GMod reads a server variable called sbox_max<name>; CreateConVar does nothing if it already exists).
-CreateConVar("sbox_maxacf_fusions", tostring(ACFLazers.FusionNumber("FusionMaxPerPlayer")), FCVAR_ARCHIVE + FCVAR_NOTIFY, "Maximum ACF fusion engines one player may spawn")
+CreateConVar("sbox_maxacf_fusions", tostring(Problem and 40 or ACFLazers.FusionNumber("FusionMaxPerPlayer")), FCVAR_ARCHIVE + FCVAR_NOTIFY, "Maximum ACF fusion engines one player may spawn")
+
+-- Every fusion engine that exists (weak keys: a removed engine drops out by itself). The PPC hook at the bottom walks it.
+local Engines = setmetatable({}, { __mode = "k" })
 
 -- ===================== WIRE =====================
 
--- The Draw input as a fraction 0..1. Nothing wired = FusionDrawDefault. [GUESS] that Wire keeps the entity a wire comes from in Inputs[name].Src (the generator and the capacitor's
+-- The Active input as true / false. Nothing wired = FusionActiveDefault. [GUESS] that Wire keeps the entity a wire comes from in Inputs[name].Src (the generator and the capacitor's
 -- AllowCharge rely on the same thing). Should this Wire not have it, the last value sent to TriggerInput is used as soon as one has arrived.
-function ENT:GetDraw()
-    local input = self.Inputs and self.Inputs.Draw
-    local value = ACFLazers.FusionNumber("FusionDrawDefault")
-    local top   = math.max(ACFLazers.FusionNumber("FusionDrawMax"), 1e-6)
+function ENT:GetActive()
+    local input = self.Inputs and self.Inputs.Active
+    local value = ACFLazers.FusionNumber("FusionActiveDefault")
 
     if input and IsValid(input.Src) then
         self.SrcWorks = true
         value         = tonumber(input.Value) or 0
-    elseif not self.SrcWorks and self.DrawTouched then
-        value = self.WireDraw
+    elseif not self.SrcWorks and self.ActiveTouched then
+        value = self.WireActive
     end
 
-    if value ~= value then value = 0 end -- NaN (a broken E2 can send one) means nothing; math.Clamp would let it through
+    if value ~= value then value = 0 end -- NaN (a broken E2 can send one) means off
 
-    return math.Clamp(value, 0, top) / top
+    return value > 0
 end
 
 function ENT:TriggerInput(name, value)
-    if name == "Draw" then
-        self.WireDraw    = tonumber(value) or 0
-        self.DrawTouched = true
+    if name == "Active" then
+        self.WireActive    = tonumber(value) or 0
+        self.ActiveTouched = true
     end
 
     self:UpdateOverlay()
@@ -83,30 +104,45 @@ end
 -- ===================== SPAWN AND SIZE =====================
 
 function ENT:Initialize()
-    self.FusionType  = ACFLazers.ClampFusionType(nil)
+    self.RatedHP     = ACFLazers.ClampFusionHP(self.RatedHP) -- (nothing yet = the slider's default; ApplyData sets the real one right after the spawn)
     self.Caps        = {}      -- capacitors linked to this engine (a set)
     self.Pool        = {}      -- the capacitor group the energy goes to (rebuilt when ACFLazers.LinkVersion changes)
     self.PoolVersion = -1
+    self.Operating   = 0       -- the operating percent as a fraction, 0..1
+    self.Charge      = 0       -- kJ held inside
+    self.RecoverAt   = 0       -- CurTime until which a PPC hit keeps the operating percent from growing
     self.EnergyRate  = 0       -- kJ per second going into the capacitors (smoothed)
     self.Room        = math.huge -- free room in the capacitors, kJ (as of the last pass; until the first pass nothing is known, so it counts as plenty)
     self.Refusing    = 0       -- capacitors with room that refuse energy because their AllowCharge is off (as of the last pass)
     self.Status      = "Not set up yet"
-    self.Efficiency  = 1       -- energy multiplier from the engine's health (1 = undamaged)
+    self.CapStatus   = ""
+    self.Efficiency  = 1       -- the ceiling of the operating percent: health efficiency x heat efficiency (as of the last pass)
+    self.IsOn        = false   -- the Active input as of the last pass
+    self.IsParented  = false   -- parented as of the last pass
+    self.AtCritical  = false   -- at or over the critical heat as of the last pass (only stays true in a safezone: anywhere else it explodes)
+    self.PPCHits     = 0       -- PPC hits taken (a counter for tests and the hover text)
     self.LastThink   = CurTime()
     self.NextOutput  = 0
     self.OverlaySig  = ""
 
+    Engines[self] = true
+
     if WireLib then
-        WireLib.CreateInputs(self, { "Draw" })
+        WireLib.CreateInputs(self, { "Active" })
         WireLib.CreateOutputs(self, {
-            "Energy",    -- kJ per second going into the capacitors
-            "Rated",     -- the generator-equivalent hp of this size
-            "MaxEnergy", -- kJ per second it could make now (its size, its health and the Draw input)
-            "Load",      -- percent: Energy / MaxEnergy
-            "Full",      -- 1 while the capacitors have no room (nothing is made)
-            "HeatKJ",    -- kJ of heat above room temperature
-            "HeatF",     -- temperature in Fahrenheit
-            "HeatPct"    -- percent of the HOT temperature (100 = HOT)
+            "Energy",     -- kJ per second going into the capacitors
+            "Rated",      -- the generator-equivalent hp (the slider)
+            "MaxEnergy",  -- kJ per second it makes at the operating percent it has now (with room to put it)
+            "Load",       -- percent: Energy / MaxEnergy
+            "Full",       -- 1 while the capacitors have no room (nothing is made)
+            "Operating",  -- operating percent (0 .. 100)
+            "Efficiency", -- the ceiling of the operating percent, percent (health x heat; 100 = full health and low heat)
+            "Charge",     -- kJ held inside (the size of the bang)
+            "ChargePct",  -- percent of the most it can hold
+            "HeatKJ",     -- kJ of heat above room temperature
+            "HeatF",      -- temperature in Fahrenheit
+            "HeatPct",    -- percent of the CRITICAL heat (100 = it explodes)
+            "Parented"    -- 1 while it is parented (it only runs then)
         })
     end
 
@@ -116,31 +152,29 @@ end
 
 -- Clamp whatever the tool / a dupe / an update sends us (the server never trusts the client).
 local function VerifyData(Data)
-    Data.FusionType = ACFLazers.ClampFusionType(Data.FusionType)
+    Data.RatedHP = ACFLazers.ClampFusionHP(Data.RatedHP)
 end
 
--- Model, scale, ACF health and mass for a size. Same order the lazer, the capacitor and the generator use: scale first (that makes the physics object), then ACF.Activate, then the mass.
-function ENT:ApplyScale(id)
-    local size = ACFLazers.GetFusionType(id)
-
+-- Model, scale, ACF health and mass for a rated power. Same order the lazer, the capacitor and the generator use: scale first (that makes the physics object), then ACF.Activate, then the mass.
+function ENT:ApplyScale(hp)
     self:SetScaledModel(ACFLazers.GetFusionModel())
-    self:SetScale(size.scale)
+    self:SetScale(ACFLazers.GetFusionScale(hp))
 
     ACF.Activate(self, true)
-    Contraption.SetMass(self, size.mass)
+    Contraption.SetMass(self, ACFLazers.GetFusionMass(hp))
 end
 
--- Apply a whole Data table {FusionType = id}. Used by spawn AND by update. FusionType is a plain field on purpose: the duplicator saves entity fields (see Entities.Register at the bottom).
+-- Apply a whole Data table {RatedHP = hp}. Used by spawn AND by update. RatedHP is a plain field on purpose: the duplicator saves entity fields (see Entities.Register at the bottom).
 function ENT:ApplyData(Data)
     VerifyData(Data)
 
-    local size = ACFLazers.GetFusionType(Data.FusionType)
+    self.RatedHP = Data.RatedHP
+    self.Name    = string.format("Fusion Engine (%d hp)", self.RatedHP) -- the undo list uses Entity.Name
 
-    self.FusionType = size.id
-    self.Name       = size.name -- the undo list uses Entity.Name
+    self:SetNW2Float("ACFFusionHP", self.RatedHP)
+    self:ApplyScale(self.RatedHP)
 
-    self:SetNW2String("ACFFusionType", self.FusionType)
-    self:ApplyScale(self.FusionType)
+    self.Charge = math.min(self.Charge or 0, ACFLazers.GetFusionChargeMax(self.RatedHP)) -- a smaller engine cannot keep a bigger engine's charge
 
     self:UpdateWireOutputs()
 end
@@ -151,7 +185,7 @@ function ENT:ACF_Activate(Recalc)
     local PhysObj = SelfACF.PhysObj
 
     local Area    = (PhysObj:GetSurfaceArea() or 0) * ACF.InchToCmSq
-    local Armour  = ACFLazers.FusionNumber("FusionArmourAtOne") * ACFLazers.GetFusionType(self.FusionType).scale * ACF.ArmorMod
+    local Armour  = ACFLazers.FusionNumber("FusionArmourAtOne") * ACFLazers.GetFusionScale(self.RatedHP) * ACF.ArmorMod
     local Health  = Area / ACF.Threshold * ACFLazers.FusionNumber("FusionHealthMult")
     local Percent = 1
 
@@ -176,6 +210,25 @@ function ENT:GetHealthFraction()
     end
 
     return 1
+end
+
+-- ===================== HEAT, PARENT, EFFICIENCY =====================
+
+-- How hot as a share of the CRITICAL heat: 0 = room temperature, 1 = critical (FusionCriticalF), 2 = twice as far above room temperature as the critical heat.
+function ENT:GetHeatFraction()
+    return Heat.GetPct(self, ACFLazers.GetFusionRiseCritical())
+end
+
+-- Is it allowed to run? Parented to something (the GMod parent tool), or FusionNeedsParent is 0.
+function ENT:CheckParent()
+    if ACFLazers.FusionNumber("FusionNeedsParent") < 1 then return true end
+
+    return IsValid(self:GetParent())
+end
+
+-- The ceiling of the operating percent right now: the health efficiency times the heat efficiency (1 = full health and low heat).
+function ENT:GetCeiling()
+    return ACFLazers.GetFusionEfficiency(self:GetHealthFraction(), self:GetHeatFraction())
 end
 
 -- ===================== THE CAPACITORS =====================
@@ -220,15 +273,30 @@ end
 
 -- ===================== THE WORK =====================
 
--- One pass of work. `dt` = seconds since the last pass.
+-- One pass of work. `now` = CurTime(), `dt` = seconds since the last pass.
 function ENT:Run(now, dt)
-    local draw   = self:GetDraw()
-    local health = self:GetHealthFraction()
-    local room, caps, limits, refusing = self:GetRoom()
+    local hp       = self.RatedHP
+    local parented = self:CheckParent()
+    local active   = self:GetActive()
+    local ceiling  = self:GetCeiling()
 
-    -- What it could make in this time (its size, its health, the Draw input), and no more than the capacitors can hold.
-    local wantKJ   = ACFLazers.GetFusionRate(self.FusionType, health, draw) * dt
-    local storedKJ = math.min(wantKJ, room)
+    -- 1. THE OPERATING PERCENT. Not parented = nothing at all. Otherwise it climbs toward the ceiling (when switched on and not waiting out a PPC hit) or falls.
+    if parented then
+        self.Operating = ACFLazers.StepFusionOperating(self.Operating, dt, hp, active, ceiling, now >= self.RecoverAt)
+    else
+        self.Operating = 0
+    end
+
+    -- 2. THE CHARGE: follows the operating percent up, drains away slowly.
+    self.Charge = ACFLazers.StepFusionCharge(self.Charge, self.Operating, hp, dt)
+
+    -- 3. THE ENERGY: what it makes at this operating percent, no more than the capacitors have room for. Nothing without a parent.
+    local room, caps, limits, refusing = self:GetRoom()
+    local storedKJ = 0
+
+    if parented and self.Operating > 0 then
+        storedKJ = math.min(ACFLazers.GetFusionRate(hp, self.Operating) * dt, room)
+    end
 
     if storedKJ > 0 then
         local scalar = ACFLazers.FusionNumber("FusionHeatScalar")
@@ -246,38 +314,82 @@ function ENT:Run(now, dt)
     local alpha = 1 - math.exp(-dt / math.max(ACFLazers.FusionNumber("FusionPowerSmoothing"), 1e-6))
 
     self.EnergyRate = self.EnergyRate + (storedKJ / dt - self.EnergyRate) * alpha
-    self.Efficiency = ACFLazers.GetGenEfficiency(health)
+    self.Efficiency = ceiling
     self.Room       = room
     self.Refusing   = refusing
+    self.IsOn       = active
+    self.IsParented = parented
 
-    self:UpdateStatus(draw, room)
+    self:UpdateStatus(now, room)
+
+    -- 4. THE CRITICAL HEAT (checked after this pass's heat went in).
+    self:CheckCritical()
 
     -- Wire outputs and hover text, a few times a second.
-    if now >= self.NextOutput then
+    if IsValid(self) and now >= self.NextOutput then -- (CheckCritical may just have blown it up)
         self.NextOutput = now + ACFLazers.FusionNumber("FusionOutputInterval")
         self:UpdateWireOutputs()
         self:RefreshOverlay()
     end
 end
 
--- kJ per second it could make now: its size, its health and the Draw input.
+-- kJ per second it makes at the operating percent it has now (with room to put it).
 function ENT:GetMaxRate()
-    return ACFLazers.GetFusionRate(self.FusionType, self:GetHealthFraction(), self:GetDraw())
+    return ACFLazers.GetFusionRate(self.RatedHP, self.Operating)
 end
 
--- The one-line state for the hover text.
-function ENT:UpdateStatus(draw, room)
-    if next(self.Caps) == nil then
-        self.Status = "No capacitor linked (nothing to store the energy in)"
-    elseif room <= 0 and self.Refusing > 0 then
-        self.Status = "AllowCharge is off on the capacitors (nothing is made)"
-    elseif room <= 0 then
-        self.Status = "Capacitors full (nothing is made)"
-    elseif draw <= 0 then
-        self.Status = "Draw is 0 (nothing is made)"
+-- The one-line state for the hover text, and a second line about the capacitors.
+function ENT:UpdateStatus(now, room)
+    if not self.IsParented then
+        self.Status = "Not parented: it will not run (parent it to its vehicle)"
+    elseif not self.IsOn then
+        self.Status = self.Operating > 0 and string.format("Switching off: operating %.0f%%", self.Operating * 100) or "Off (the Active input is 0)"
+    elseif now < self.RecoverAt then
+        self.Status = string.format("Disrupted by a PPC: waiting %.1f s to recover", self.RecoverAt - now)
+    elseif self.Operating < self.Efficiency - 1e-6 then
+        self.Status = string.format("Spinning up: operating %.0f%% of a possible %.0f%%", self.Operating * 100, self.Efficiency * 100)
+    elseif self.Operating > self.Efficiency + 1e-6 then
+        self.Status = string.format("Over its ceiling (health or heat): falling toward %.0f%%", self.Efficiency * 100)
     else
-        self.Status = string.format("Making %.0f kJ/s", self.EnergyRate)
+        self.Status = string.format("Running at %.0f%%", self.Operating * 100)
     end
+
+    if next(self.Caps) == nil then
+        self.CapStatus = "No capacitor linked (nothing to store the energy in)"
+    elseif room <= 0 and self.Refusing > 0 then
+        self.CapStatus = "AllowCharge is off on the capacitors (nothing is made)"
+    elseif room <= 0 then
+        self.CapStatus = "Capacitors full (nothing is made)"
+    else
+        self.CapStatus = ""
+    end
+end
+
+-- ===================== PPC HITS =====================
+
+-- A PPC detonated at `pos` (caliber in mm). Within FusionPPCRange of the engine its operating percent is cut at once and the wait before it may grow again is rolled.
+-- Returns true when the engine was hit. Safezone engines, engines that are exploding, and engines that are idle with nothing to disturb are left alone.
+function ENT:PPCHit(pos, caliber, now)
+    if self.Exploding or not pos then return false end
+
+    now = now or CurTime()
+
+    if ACFLazers.IsProtectedBySafezone(self) then return false end
+    if self:LocalToWorld(self:OBBCenter()):Distance(pos) > ACFLazers.FusionNumber("FusionPPCRange") then return false end
+    if not (self.Operating > 0 or now < self.RecoverAt) then return false end
+
+    local cut = ACFLazers.GetFusionPPCCut(caliber, self.RatedHP)
+
+    if cut <= 0 then return false end
+
+    self.Operating = math.max(self.Operating - cut, 0)
+    self.RecoverAt = now + ACFLazers.GetFusionRecoveryDelay(self.RatedHP, math.random())
+    self.PPCHits   = self.PPCHits + 1
+
+    self:UpdateWireOutputs()
+    self:UpdateOverlay()
+
+    return true
 end
 
 -- ===================== WIRE + OVERLAY =====================
@@ -285,44 +397,55 @@ end
 function ENT:UpdateWireOutputs()
     if not WireLib then return end
 
-    local size = ACFLazers.GetFusionType(self.FusionType)
-    local max  = self:GetMaxRate()
+    local max    = self:GetMaxRate()
+    local most   = ACFLazers.GetFusionChargeMax(self.RatedHP)
+    local critic = ACFLazers.GetFusionRiseCritical()
 
     WireLib.TriggerOutput(self, "Energy", self.EnergyRate)
-    WireLib.TriggerOutput(self, "Rated", size.hp)
+    WireLib.TriggerOutput(self, "Rated", self.RatedHP)
     WireLib.TriggerOutput(self, "MaxEnergy", max)
     WireLib.TriggerOutput(self, "Load", max > 0 and self.EnergyRate / max * 100 or 0)
     WireLib.TriggerOutput(self, "Full", (next(self.Caps) ~= nil and self.Room <= 0 and self.Refusing == 0) and 1 or 0)
+    WireLib.TriggerOutput(self, "Operating", self.Operating * 100)
+    WireLib.TriggerOutput(self, "Efficiency", self.Efficiency * 100)
+    WireLib.TriggerOutput(self, "Charge", self.Charge)
+    WireLib.TriggerOutput(self, "ChargePct", most > 0 and self.Charge / most * 100 or 0)
     WireLib.TriggerOutput(self, "HeatKJ", Heat.GetKJ(self))
     WireLib.TriggerOutput(self, "HeatF", Heat.GetTempF(self))
-    WireLib.TriggerOutput(self, "HeatPct", Heat.GetPctHot(self) * 100)
+    WireLib.TriggerOutput(self, "HeatPct", Heat.GetPct(self, critic) * 100)
+    WireLib.TriggerOutput(self, "Parented", self.IsParented and 1 or 0)
 end
 
 -- The hover text (ACF's overlay system calls this; ENT:UpdateOverlay() asks it to refresh).
 function ENT:ACF_UpdateOverlayState(State)
-    local size       = ACFLazers.GetFusionType(self.FusionType)
+    local hp         = self.RatedHP
     local linkedCaps = 0
+    local most       = ACFLazers.GetFusionChargeMax(hp)
+    local heatFrac   = self:GetHeatFraction()
 
     for _ in pairs(self.Caps) do linkedCaps = linkedCaps + 1 end
 
-    if linkedCaps > 0 and self.EnergyRate > 0 then
+    if not self.IsParented then
+        State:AddError(self.Status)
+    elseif self.Status:find("Disrupted", 1, true) then
+        State:AddWarning(self.Status) -- (before the green line: a disrupted engine usually still makes some energy)
+    elseif self.EnergyRate > 0 then
         State:AddSuccess(self.Status)
-    elseif linkedCaps == 0 then
-        State:AddWarning(self.Status)
     else
         State:AddLabel(self.Status)
     end
 
-    State:AddKeyValue("Type", string.format("%s (%.0f kg, model scale %g)", size.name, size.mass, size.scale))
-    State:AddKeyValue("Rated power", string.format("%g hp of a generator hub (%.0f kJ/s at full health)", size.hp, ACFLazers.GetFusionRate(size.id, 1, 1)))
+    if self.CapStatus ~= "" then State:AddWarning(self.CapStatus) end
+
+    if self.AtCritical then State:AddError("Critical heat: it would explode, but it is in a safezone") end
+
+    State:AddProgressBar("Operating", math.Round(self.Operating * 100, 1), 100, "%")
+    State:AddProgressBar("Charge", math.Round(self.Charge, 1), math.Round(most, 1), " kJ")
+    State:AddKeyValue("Rated power", string.format("%d hp of a generator hub (%.0f kJ/s at 100%%)", hp, ACFLazers.GetFusionRatedRate(hp)))
     State:AddKeyValue("Making", string.format("%.0f kJ/s", self.EnergyRate))
-    State:AddKeyValue("Health efficiency", string.format("%.0f%% (x%.2f energy)", self.Efficiency * 100, self.Efficiency))
-    State:AddKeyValue("Draw input", string.format("%.0f%%", self:GetDraw() * 100))
-
-    if ACFLazers.FusionNumber("FusionHeatScalar") > 0 then
-        State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of HOT)", Heat.GetTempF(self), Heat.GetPctHot(self) * 100))
-    end
-
+    State:AddKeyValue("Efficiency ceiling", string.format("%.0f%% (health x%.2f, heat x%.2f)", self.Efficiency * 100, ACFLazers.GetFusionHealthEfficiency(self:GetHealthFraction()), ACFLazers.GetFusionHeatEfficiency(heatFrac)))
+    State:AddKeyValue("Explosive content", string.format("%.2f kg of HE", ACFLazers.GetFusionBlastFiller(self.Charge)))
+    State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of its critical heat, %g F)", Heat.GetTempF(self), heatFrac * 100, ACFLazers.FusionNumber("FusionCriticalF")))
     State:AddKeyValue("Linked", string.format("%d capacitor(s)", linkedCaps))
 
     if linkedCaps > 0 then
@@ -341,7 +464,9 @@ end
 
 -- Refresh the hover text, but only when something worth showing changed (ACF's overlay networks changes).
 function ENT:RefreshOverlay()
-    local signature = self.Status .. "|" .. self.FusionType .. "|" .. math.floor(self.EnergyRate / 10) .. "|" .. math.floor(self:GetDraw() * 100) .. "|" .. math.floor(self.Efficiency * 100) .. "|" .. math.floor(Heat.GetPctHot(self) * 20)
+    local most      = math.max(ACFLazers.GetFusionChargeMax(self.RatedHP), 1e-6)
+    local signature = self.Status .. "|" .. self.CapStatus .. "|" .. self.RatedHP .. "|" .. math.floor(self.EnergyRate / 10) .. "|" .. math.floor(self.Operating * 100) .. "|" .. math.floor(self.Efficiency * 100)
+        .. "|" .. math.floor(self.Charge / most * 100) .. "|" .. math.floor(self:GetHeatFraction() * 20) .. (self.AtCritical and "c" or "")
 
     if signature ~= self.OverlaySig then
         self.OverlaySig = signature
@@ -364,41 +489,74 @@ function ENT:Think()
     return true
 end
 
--- ===================== LINKING =====================
--- fusion engine <-> capacitor uses ACF's link system, like the generator <-> capacitor link does. The tools call  a:Link(b)  and  a:Unlink(b).
--- (A link made from either side works: ACF tries the registered pair in both orders.) The capacitor keeps the engine in its set of linked "generators" (its own file is not changed).
+-- ===================== DAMAGE AND EXPLOSION =====================
 
-ACF.RegisterLinkSource("acf_fusion", "Caps")
+-- At or over the critical heat the engine detonates. In a safezone it cannot: it only keeps the flag (the hover text says so).
+function ENT:CheckCritical()
+    if self.Exploding then return end
 
-ACF.RegisterClassLink("acf_fusion", "acf_capacitor", function(Fusion, Cap)
-    if Fusion.Caps[Cap] then return false, "This fusion engine is already linked to this capacitor." end
+    if self:GetHeatFraction() < 1 then
+        self.AtCritical = false
 
-    Fusion.Caps[Cap]        = true
-    Cap.Generators          = Cap.Generators or {}
-    Cap.Generators[Fusion]  = true
+        return
+    end
 
-    ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1 -- every pool rebuilds the next time it is needed
+    self.AtCritical = true
 
-    Fusion:UpdateOverlay(true)
-    Cap:UpdateOverlay(true)
+    if ACFLazers.IsProtectedBySafezone(self) then return end
 
-    return true, "Fusion engine linked to the capacitor."
-end)
+    self:Detonate()
+end
 
-ACF.RegisterClassUnlink("acf_fusion", "acf_capacitor", function(Fusion, Cap)
-    if not (Fusion.Caps[Cap] or (Cap.Generators and Cap.Generators[Fusion])) then return false, "This fusion engine is not linked to this capacitor." end
+-- ACF calls this instead of its default prop damage (the same hook the capacitor, acf_fueltank and acf_ammo use for their explosions).
+-- Returns the usual HitRes table. Destroyed = detonates (unless it is in a safezone).
+function ENT:ACF_OnDamage(DmgResult, DmgInfo)
+    local HitRes = Damage.doPropDamage(self, DmgResult, DmgInfo)
 
-    Fusion.Caps[Cap] = nil
+    if self.Exploding then return HitRes end
 
-    if Cap.Generators then Cap.Generators[Fusion] = nil end
+    if HitRes.Kill then
+        self.Attacker  = DmgInfo:GetAttacker()
+        self.Inflictor = DmgInfo:GetInflictor()
 
-    ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1
+        self:Detonate()
+    end
 
-    Fusion:UpdateOverlay(true)
-    Cap:UpdateOverlay(true)
+    return HitRes
+end
 
-    return true, "Fusion engine unlinked from the capacitor."
-end)
+-- The bang. The charge becomes an ACF explosion: filler kg = charge kJ x FusionBlastMult / ACF.HEPower (never under FusionBlastMinKJ worth). Same shape as the capacitor's Detonate.
+-- Inside a safezone it cannot explode: it is simply removed (no explosion, nothing else killed).
+function ENT:Detonate()
+    if self.Exploding then return end
+
+    self.Exploding = true
+
+    local filler = ACFLazers.GetFusionBlastFiller(self.Charge)
+
+    self.Charge    = 0 -- it is gone either way
+    self.Operating = 0
+
+    if ACFLazers.IsProtectedBySafezone(self) then
+        constraint.RemoveAll(self)
+        self:Remove()
+
+        return
+    end
+
+    local position = self:LocalToWorld(self:OBBCenter() + VectorRand() * (self:OBBMaxs() - self:OBBMins()) / 2)
+    local dmgInfo  = Objects.DamageInfo(self.Attacker or self, self.Inflictor)
+
+    ACF.KillChildProps(self, position, filler)
+
+    Damage.createExplosion(position, filler, filler * 0.5, { self }, dmgInfo)
+    Damage.explosionEffect(position, nil, filler)
+
+    constraint.RemoveAll(self)
+    self:Remove()
+end
+
+-- ===================== LINKING (methods; the registration is at the bottom) =====================
 
 -- Breaks every link this engine has. Returns how many it broke. (The link tools' reload uses it.)
 function ENT:UnlinkAll()
@@ -416,6 +574,8 @@ function ENT:UnlinkAll()
 end
 
 function ENT:OnRemove()
+    Engines[self] = nil
+
     -- Straight table clean-up instead of ACF.PerformClassUnlink: the entity is on its way out and we only need everybody to forget it.
     for Cap in pairs(self.Caps) do
         if IsValid(Cap) and Cap.Generators then Cap.Generators[self] = nil end
@@ -468,6 +628,17 @@ end
 
 -- Signature (Player, Pos, Angle, Data) is what Entities.Register wants (registration.lua:1007).
 function MakeACFFusion(ply, pos, angles, Data)
+    -- Something this file needs is missing (see the top): say exactly what, where the player AND the server console can see it.
+    if Problem then
+        local msg = "[acf_fusion] cannot spawn: " .. Problem
+
+        ErrorNoHalt(msg .. "\n")
+
+        if IsValid(ply) then ply:ChatPrint(msg) end
+
+        return nil
+    end
+
     if not istable(Data) then Data = {} end
 
     if IsValid(ply) and not ply:CheckLimit("acf_fusions") then return nil end
@@ -510,5 +681,71 @@ function MakeACFFusion(ply, pos, angles, Data)
     return ent
 end
 
--- Dupe key: FusionType ("large" / "small"). A dupe with none, or an unknown one, is the default size.
-Entities.Register("acf_fusion", MakeACFFusion, "FusionType")
+-- THE REGISTRATION. It comes BEFORE everything that can fail (the links, the PPC hook) on purpose: from here on ACF knows the class, whatever else goes wrong.
+-- Dupe key: RatedHP (the slider value). A dupe with none, or a silly one, is the slider's default.
+Entities.Register("acf_fusion", MakeACFFusion, "RatedHP")
+
+if Entities.Get and Entities.Get("acf_fusion") then
+    MsgN("[acf_fusion] registered with ACF: acf_fusion can be spawned" .. (Problem and " (but it is refusing to: see the error above)" or ""))
+else
+    ErrorNoHalt("[acf_fusion] ACF did not take the registration of acf_fusion (Entities.Get finds nothing). Is this ACF's Entities.Register?\n")
+end
+
+-- ===================== LINKING AND THE PPC HOOK (each in its own pcall: a failure is printed and does not stop the rest) =====================
+
+local function Try(label, fn)
+    local ok, err = pcall(fn)
+
+    if not ok then ErrorNoHalt("[acf_fusion] " .. label .. " could not be set up: " .. tostring(err) .. "\n") end
+end
+
+-- fusion engine <-> capacitor uses ACF's link system, like the generator <-> capacitor link does. The tools call  a:Link(b)  and  a:Unlink(b).
+-- (A link made from either side works: ACF tries the registered pair in both orders.) The capacitor keeps the engine in its set of linked "generators" (its own file is not changed).
+Try("the link to capacitors", function()
+    ACF.RegisterLinkSource("acf_fusion", "Caps")
+
+    ACF.RegisterClassLink("acf_fusion", "acf_capacitor", function(Fusion, Cap)
+        if Fusion.Caps[Cap] then return false, "This fusion engine is already linked to this capacitor." end
+
+        Fusion.Caps[Cap]        = true
+        Cap.Generators          = Cap.Generators or {}
+        Cap.Generators[Fusion]  = true
+
+        ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1 -- every pool rebuilds the next time it is needed
+
+        Fusion:UpdateOverlay(true)
+        Cap:UpdateOverlay(true)
+
+        return true, "Fusion engine linked to the capacitor."
+    end)
+
+    ACF.RegisterClassUnlink("acf_fusion", "acf_capacitor", function(Fusion, Cap)
+        if not (Fusion.Caps[Cap] or (Cap.Generators and Cap.Generators[Fusion])) then return false, "This fusion engine is not linked to this capacitor." end
+
+        Fusion.Caps[Cap] = nil
+
+        if Cap.Generators then Cap.Generators[Fusion] = nil end
+
+        ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1
+
+        Fusion:UpdateOverlay(true)
+        Cap:UpdateOverlay(true)
+
+        return true, "Fusion engine unlinked from the capacitor."
+    end)
+end)
+
+-- The PPC announces every blast with hook.Run("ACFLazers_PPCImpact", position, caliber, bullet) (acf/entities/ammo_types/lazers_ppc.lua, 16.9). Every engine decides for itself what it does (PPCHit).
+Try("the PPC hook", function()
+    hook.Add("ACFLazers_PPCImpact", "ACFLazers_FusionPPC", function(pos, caliber)
+        local now = CurTime()
+
+        for ent in pairs(Engines) do
+            if IsValid(ent) then
+                ent:PPCHit(pos, caliber, now)
+            else
+                Engines[ent] = nil
+            end
+        end
+    end)
+end)

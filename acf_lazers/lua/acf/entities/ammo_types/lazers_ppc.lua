@@ -23,6 +23,8 @@
 --     and armour rules never let the blast reach, the shooter's contraption (filtered), safezones, people and anything ACF's permission check refuses get nothing. (16.1 to 16.5 heated every ACF thing
 --     inside a sphere, falling off with distance, whether the blast could reach it or not.) Later the heat is to become the way lazers and PPCs do their damage.
 --   * No penetration, no world penetration: the projectile explodes on the first thing it touches (PropImpact / WorldImpact return false). [LATER: it may pass light props and explode on the heaviest.]
+--   * THE IMPACT EVENT (16.9): right after the blast (the same safezone rules: a PPC that makes no blast makes no event) the hook ACFLazers_PPCImpact is run with (position, caliber in mm, the projectile).
+--     The fusion engines listen to it: a PPC that goes off within 300 units of one cuts its operating percent. Nothing else in the addon listens; a failing listener never breaks the blast.
 -- =========================================================================
 
 local ACF       = ACF
@@ -151,6 +153,14 @@ if SERVER then
 
                 if not Ok then
                     ErrorNoHalt("[acf_ppc] the explosion failed: " .. tostring(Err) .. "\n")
+                end
+
+                -- [CHANGED 31] (16.9) The impact event (see the header). The caliber is what the PPC wrote on the projectile (PPCCaliber, mm); an old projectile without it falls back on ACF's own
+                -- (centimetres). It runs after the blast and independent of it, in a pcall, like the heat pass.
+                local EventOk, EventErr = pcall(hook.Run, "ACFLazers_PPCImpact", Position, Bullet.PPCCaliber or ((Bullet.Caliber or 0) * 10), Bullet)
+
+                if not EventOk then
+                    ErrorNoHalt("[acf_ppc] the impact event failed: " .. tostring(EventErr) .. "\n")
                 end
 
                 -- The heat comes after the blast and does not depend on it: a blast that fails half way still heats what it hurt before, and a failing heat pass never breaks the blast (or the removal below).
