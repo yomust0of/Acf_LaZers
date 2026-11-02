@@ -448,12 +448,12 @@ table.Merge(ACFLazers.Config, {
     -- FusionChargeDrainSeconds), so switching it off, a PPC hit or a spin-down does not empty it at once. When the engine explodes (critical heat, or destroyed) the charge becomes an ACF explosion: filler kg =
     -- charge kJ x FusionBlastMult / ACF.HEPower (the capacitor's rule). An engine in a safezone, or with no charge, does not hurt anything.
     FusionModel         = "models/lasers/fusion.mdl", -- the model. If the file is missing the fusion engine refuses to spawn and says so. Scaled by the slider
-    FusionHPMin         = 250,    -- smallest rated power the slider makes (hp of a generator hub)
+    FusionHPMin         = 100,    -- smallest rated power the slider makes (hp of a generator hub)
     FusionHPMax         = 6500,   -- biggest rated power (hp)
-    FusionHPDefault     = 6500,   -- where the slider starts
-    FusionMassSmall     = 1500,   -- kg at FusionHPMin
+    FusionHPDefault     = 1000,   -- where the slider starts
+    FusionMassSmall     = 600,   -- kg at FusionHPMin
     FusionMassBig       = 10000,  -- kg at FusionHPMax
-    FusionScaleSmall    = 0.25,   -- model scale at FusionHPMin
+    FusionScaleSmall    = 0.3,   -- model scale at FusionHPMin
     FusionScaleBig      = 1,      -- model scale at FusionHPMax
     FusionSpinUpSmall   = 8,      -- seconds from 0 to 100% operating at FusionHPMin
     FusionSpinUpBig     = 15,     -- seconds from 0 to 100% operating at FusionHPMax
@@ -467,7 +467,7 @@ table.Merge(ACFLazers.Config, {
     FusionPPCDelayMin   = 1,      -- seconds: the shortest time after a PPC hit before the operating percent may grow again (both ends of the slider)
     FusionPPCDelayMaxSmall = 3,   -- seconds: the longest of that wait at FusionHPMin (a random time between FusionPPCDelayMin and this)
     FusionPPCDelayMaxBig = 5,     -- seconds: ... and at FusionHPMax
-    FusionHeatScalar    = 0.25,   -- kJ of heat the engine gets per kJ it puts into the capacitors (a quarter). 0 = no heat
+    FusionHeatScalar    = 2.5,   -- kJ of heat the engine gets per kJ it puts into the capacitors (a quarter). 0 = no heat
     FusionCriticalF     = 1500,   -- degrees Fahrenheit. The critical heat: the engine detonates there. (A plate is HOT at HeatHotF, 1100 F.)
     FusionHeatEffStart  = 0.5,    -- [GUESS] share of the critical heat (kelvin above room temperature) up to which the heat efficiency is still 1 ("low heat")
     FusionHeatEffAtCritical = 0.5, -- [GUESS] the heat efficiency AT the critical heat (a straight line from 1 at FusionHeatEffStart). 0 would stop it dead there, so it could never reach the critical heat by itself
@@ -483,7 +483,7 @@ table.Merge(ACFLazers.Config, {
     FusionToolCapSize   = 60,       -- the fusion tool quotes "fills a capacitor this big in N seconds" for this capacitor size (a display number only: changes nothing in the game)
     FusionArmourAtOne   = 40,       -- [GUESS] mm of armour at model scale 1 (scales with the model scale, times ACF.ArmorMod): 10 mm for the smallest
     FusionHealthMult    = 1,        -- multiplier on the health ACF works out from the surface area
-    FusionMaxPerPlayer  = 40,       -- default for the server variable sbox_maxacf_fusions (how many fusion engines one player may have). Like the other four it is only a DEFAULT: set the variable on the server
+    FusionMaxPerPlayer  = 8,       -- default for the server variable sbox_maxacf_fusions (how many fusion engines one player may have). Like the other four it is only a DEFAULT: set the variable on the server
 
     -- ===================== HEAT (the heat core. The radiator block follows it) ===================== [CHANGED 1]
     -- WHAT IT IS. Any entity can hold heat. Heat is kept as kJ ABOVE room temperature, and an entity's heat CAPACITY is its mass: kJ per kelvin = mass (kg) x HeatSpecificHeat.
