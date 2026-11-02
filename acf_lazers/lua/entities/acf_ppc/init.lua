@@ -1,5 +1,5 @@
 -- =========================================================================
--- ACF PPC: SERVER FILE  (16.6)
+-- ACF PPC: SERVER FILE  (19)
 -- Goes to:  lua/entities/acf_ppc/init.lua       (replaces the EMPTY placeholder that is there now. The CLIENT file is cl_init.lua next to it: never put this file there)
 --           NEEDS the 16.2 config (lua/autorun/acf_lazers_config.lua: the PPC knobs and helpers), lua/autorun/acf_lazers_heat.lua (the heat store) AND lua/acf/entities/ammo_types/lazers_ppc.lua (the projectile): it refuses to load without them
 --
@@ -23,6 +23,9 @@
 --   67.8% at 20 mm, 77% at 100 mm, 100% at 300 mm). The code already asked the config.
 -- 16.6: the load check no longer asks for ACFLazers.GetPPCHeat (the blast's heat is worked out from the damage it does now: lazers_ppc.lua and GetPPCDamageHeat; this file never used it). The smallest PPC is 50 mm
 --   (config PPCCaliberMin; Data.Caliber is clamped to it as before). Nothing else changed.
+-- 19: THE BALL'S COLOUR. A PPC keeps three whole numbers BallR / BallG / BallB (0..255, from the tool's colour picker, clamped here; a missing one is the config's cyan) and tells the clients the colour as the
+--   networked vector FlightColor, next to FlightMaterial; the client hook in lazers_ppc.lua tints the flying ball with it (always fully opaque). The three names are in the duplicator list, so a copy keeps the colour.
+--   The ball's SIZE and material come from the config as before (NetworkBolt asks GetPPCBallScale and PPCBallMaterial). The version is 19.
 -- Not in yet (asked for later): the effects (sparks, energy round the projectile), RECOIL (the same maths ACF's cannons use, parented and unparented), pushing the parent chain of a prop that is hit,
 --   penetrating light props (explode on the heaviest instead), the explosion's own sound and effects.
 -- =========================================================================
@@ -45,7 +48,7 @@ if not LASER_CONFIG then
 end
 
 -- This file needs the config of the SAME batch (the PPC helpers are new in 16). With an older config every shot would throw; say it once, clearly.
-if not (ACFLazers.GetPPCShotEnergy and ACFLazers.PPCNumber and ACFLazers.GetPPCSpeed and ACFLazers.ClampPPCCaliber and ACFLazers.IsProtectedBySafezone and ACFLazers.DescribeSafezone and ACFLazers.GetPPCDamageHeat) then
+if not (ACFLazers.GetPPCShotEnergy and ACFLazers.PPCNumber and ACFLazers.GetPPCSpeed and ACFLazers.ClampPPCCaliber and ACFLazers.IsProtectedBySafezone and ACFLazers.DescribeSafezone and ACFLazers.GetPPCDamageHeat and ACFLazers.GetPPCBallColor) then
     ErrorNoHalt("[acf_ppc] the PPC helpers are missing: lua/autorun/acf_lazers_config.lua is older than this init.lua. Copy the new config as well, then restart.\n")
     return
 end
@@ -58,7 +61,7 @@ end
 
 local Heat = ACFLazers.Heat
 
-local VERSION = "16.6"
+local VERSION = "19"
 MsgN("[acf_ppc] init.lua version " .. VERSION .. " loaded")
 
 local IDLE_THINK = 0.2   -- seconds between Thinks while nobody holds Fire, the PPC is not cooling and it holds no heat
@@ -79,6 +82,9 @@ cleanup.Register("acf_ppcs")
 -- Clamp whatever the tool / a dupe / an update sends us into the allowed range. The SERVER-side guard: never trust the client.
 local function VerifyData(Data)
     Data.Caliber = math.Round(ACFLazers.ClampPPCCaliber(Data.Caliber), 2)
+
+    -- 19: the ball's colour, whole numbers 0..255; a missing or junk part (an old dupe, a hand-made table) is the config's colour (cyan)
+    Data.BallR, Data.BallG, Data.BallB = ACFLazers.GetPPCBallColor(Data.BallR, Data.BallG, Data.BallB)
 end
 
 function ENT:Initialize()
@@ -142,7 +148,7 @@ end
 
 -- What ACF's bullet effect reads from the "crate" of a bullet (here: this PPC), on every client, to draw the flying projectile [SEEN effects/acf_bullet_effect.lua:42-71]:
 -- the ammo type name, the caliber (the effect sets the model scale to it x 0.1), the mass, the drag, whether it has a tracer, the acceleration (a ZERO vector: no gravity) and the model.
--- FillerMass is read by the explosion picture when the projectile ends. FlightMaterial and FlightLife are read by lazers_ppc.lua's client hook.
+-- FillerMass is read by the explosion picture when the projectile ends. FlightMaterial, FlightColor (19) and FlightLife are read by lazers_ppc.lua's client hook.
 function ENT:NetworkBolt()
     local caliber = self:GetCaliber()
 
@@ -157,15 +163,22 @@ function ENT:NetworkBolt()
     self:SetNW2String("FlightModel", ACFLazers.PPCString("PPCBallModel"))
     self:SetNW2Int("FlightBodygroup", 0)
     self:SetNW2String("FlightMaterial", ACFLazers.PPCString("PPCBallMaterial"))
+
+    local r, g, b = ACFLazers.GetPPCBallColor(self.BallR, self.BallG, self.BallB) -- 19: nil (not applied yet) becomes the config's colour
+
+    self:SetNW2Vector("FlightColor", Vector(r, g, b)) -- red, green, blue 0..255 (a vector holds three numbers; there is no alpha: the client puts 255 on it)
     self:SetNW2Float("FlightLife", ACFLazers.PPCNumber("PPCLifetime")) -- lazers_ppc.lua's client hook ends the ball when the server's projectile is deleted
 end
 
--- Apply a whole Data table {Caliber = mm}. Used by spawn AND by update, so both behave the same.
--- self.Caliber is a plain field on purpose: the duplicator saves entity fields, and Entities.Register (bottom of this file) lists the name, so a paste can rebuild the PPC.
+-- Apply a whole Data table {Caliber = mm, BallR =, BallG =, BallB =}. Used by spawn AND by update, so both behave the same.
+-- self.Caliber (and self.BallR / G / B, 19) are plain fields on purpose: the duplicator saves entity fields, and Entities.Register (bottom of this file) lists the names, so a paste can rebuild the PPC.
 function ENT:ApplyData(Data)
     VerifyData(Data)
 
     self.Caliber = Data.Caliber
+    self.BallR   = Data.BallR -- before ApplyCaliber: that is what networks the ball (NetworkBolt reads these)
+    self.BallG   = Data.BallG
+    self.BallB   = Data.BallB
     self.Name    = string.format("%gmm PPC", Data.Caliber) -- the undo list uses Entity.Name
 
     self:ApplyCaliber(Data.Caliber)
@@ -709,7 +722,7 @@ function ENT:Update(Data)
 end
 
 if SERVER then
-    -- Data is a table {Caliber = mm}. Signature (Player, Pos, Angle, Data) is what Entities.Register wants.
+    -- Data is a table {Caliber = mm, BallR =, BallG =, BallB =}. Signature (Player, Pos, Angle, Data) is what Entities.Register wants.
     function MakeACFPPC(ply, pos, angles, Data)
         if not istable(Data) then
             Data = { Caliber = Data }
@@ -745,7 +758,8 @@ if SERVER then
     end
 
     -- "Caliber" is the plain field ApplyData stores; ACF's Register builds the duplicator entry with it. If it is ever renamed, old dupes paste at the default size.
-    Entities.Register("acf_ppc", MakeACFPPC, "Caliber")
+    -- 19: "BallR", "BallG", "BallB" are the ball's colour (plain fields too). An old dupe without them pastes with the config's colour (VerifyData fills them in).
+    Entities.Register("acf_ppc", MakeACFPPC, "Caliber", "BallR", "BallG", "BallB")
 
     -- LINKING PPC <-> capacitor, through ACF's own link system (the same one lazers, guns and ammo crates use). The PPC puts itself in the capacitor's Lazers set: the capacitor treats it like a
     -- lazer (the link count in its hover text, "powering something" while the PPC draws, unlinking when either is removed).

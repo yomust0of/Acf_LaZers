@@ -25,6 +25,9 @@
 --   * No penetration, no world penetration: the projectile explodes on the first thing it touches (PropImpact / WorldImpact return false). [LATER: it may pass light props and explode on the heaviest.]
 --   * THE IMPACT EVENT (16.9): right after the blast (the same safezone rules: a PPC that makes no blast makes no event) the hook ACFLazers_PPCImpact is run with (position, caliber in mm, the projectile).
 --     The fusion engines listen to it: a PPC that goes off within 300 units of one cuts its operating percent. Nothing else in the addon listens; a failing listener never breaks the blast.
+--
+-- 19: THE BALL'S LOOK (client hook at the bottom): the material is models/alyx/emptool_glow (config PPCBallMaterial) and the ball is tinted with the colour the PPC networked (FlightColor: the colour picked in the
+--   PPC tool), always with alpha 255. The size comes from the PPC (config PPCBallSizeSmall .. PPCBallSizeBig). Nothing about the blast changed.
 -- =========================================================================
 
 local ACF       = ACF
@@ -214,8 +217,9 @@ else
         Damage.explosionEffect(Bullet.SimPos, Bullet.SimFlight, Bullet.FillerMass)
     end
 
-    -- ACF's client effect has just made the flying ball (model and scale from the values the PPC networked). Two small touches, both optional and harmless if they do not take:
+    -- ACF's client effect has just made the flying ball (model and scale from the values the PPC networked). Three small touches, all optional and harmless if they do not take:
     --   * the material the config asks for (PPCBallMaterial; empty = the model's own)
+    --   * (19) the colour the PPC networked (FlightColor, red / green / blue 0..255), with alpha 255 always. The call is guarded: if the effect refuses a colour the ball is simply drawn untinted
     --   * ACF keeps a client ball for 45 seconds, whatever the server does. The server deletes the projectile after PPCLifetime, so the ball is told to stop at the same time.
     hook.Add("ACF_OnCreateBulletEffect", "ACFLazers_PPCBall", function(Effect, BulletData)
         if BulletData.AmmoType ~= ID then return end
@@ -227,6 +231,17 @@ else
         local Material = Crate:GetNW2String("FlightMaterial", "")
 
         if Material ~= "" then Effect:SetMaterial(Material) end
+
+        -- 19: the tint. The default (no vector networked yet) is the config's colour. Nothing here may throw: it would end the effect's Init before the lifetime below is set.
+        local DefR, DefG, DefB = 0, 255, 255
+
+        if ACFLazers and ACFLazers.GetPPCBallColor then DefR, DefG, DefB = ACFLazers.GetPPCBallColor() end
+
+        local Tint = Crate:GetNW2Vector("FlightColor", Vector(DefR, DefG, DefB))
+
+        pcall(function()
+            Effect:SetColor(Color(math.Clamp(math.Round(Tint.x), 0, 255), math.Clamp(math.Round(Tint.y), 0, 255), math.Clamp(math.Round(Tint.z), 0, 255), 255))
+        end)
 
         local Life = Crate:GetNW2Float("FlightLife", 0)
 

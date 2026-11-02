@@ -4,6 +4,8 @@
 -- Reload (link / unlink) come from the shared link kit, like every tool of this addon: link engine > generator > capacitor > PPC.
 -- Needs the 16 config (lua/autorun/acf_lazers_config.lua: the PPC knobs and helpers) and the 16 link kit (lua/autorun/acf_lazers_linkkit.lua).
 -- 16.2: the info line under the slider also says what a shot does to the PPC's own heat (kJ and percent of its limit). Nothing else changed.
+-- 19: a COLOUR PICKER for the PPC's ball (red / green / blue; no opacity: the ball is always fully opaque). Left-click sends the colour with the size: a new PPC gets it, a PPC you aim at is recoloured.
+--   The starting colour is the config's PPCBallColorR / G / B (cyan). Needs the 19 config (GetPPCBallColor) and the 19 acf_ppc init.lua (the colour is stored and networked there).
 -- =========================================================================
 
 TOOL.Category = "ACF - LaZers"
@@ -11,10 +13,13 @@ TOOL.Name = "PPC Spawner"
 
 local Config = ACFLazers and ACFLazers.Config
 assert(Config, "[acf_ppc_tool] lua/autorun/acf_lazers_config.lua is missing or did not load")
-assert(ACFLazers.PPCNumber and ACFLazers.GetPPCReadout, "[acf_ppc_tool] lua/autorun/acf_lazers_config.lua is older than this tool (the PPC helpers are missing): copy the new config too")
+assert(ACFLazers.PPCNumber and ACFLazers.GetPPCReadout and ACFLazers.GetPPCBallColor, "[acf_ppc_tool] lua/autorun/acf_lazers_config.lua is older than this tool (the PPC helpers are missing): copy the new config too")
 assert(ACFLazers.LinkKit, "[acf_ppc_tool] lua/autorun/acf_lazers_linkkit.lua is missing or did not load")
 
 TOOL.ClientConVar["caliber"] = ACFLazers.PPCNumber("PPCCaliberBase")
+TOOL.ClientConVar["ballr"]   = (ACFLazers.GetPPCBallColor())  -- 19: the colour picker's three numbers start at the config's colour (cyan)
+TOOL.ClientConVar["ballg"]   = select(2, ACFLazers.GetPPCBallColor())
+TOOL.ClientConVar["ballb"]   = select(3, ACFLazers.GetPPCBallColor())
 
 -- Right-click (select / link), Shift + right-click, Reload (unlink), Holster, and the help lines at the bottom-left of the screen: the shared link kit.
 ACFLazers.LinkKit.Install(TOOL, "acf_ppc_tool", "Spawn a PPC with this size, or update the one you are aiming at")
@@ -69,6 +74,9 @@ if CLIENT then
         Refresh()
         timer.Simple(0, Refresh) -- once more after the slider has read its saved value
 
+        -- 19: ColorPicker(label, red convar, green convar, blue convar), the same picker the lazer tool shows. The opacity convar is the optional fifth one; it is left out on purpose: the ball is always fully opaque.
+        panel:ColorPicker("Ball colour", "acf_ppc_tool_ballr", "acf_ppc_tool_ballg", "acf_ppc_tool_ballb")
+
         panel:Help("Link the PPC to a capacitor with the right-click link controls of this tool (or any tool of this addon). A shot is released when its Fire wire input goes from 0 to above 0 and the capacitors hold the shot's energy.")
     end
 end
@@ -82,8 +90,13 @@ function TOOL:LeftClick(trace)
     local Messages = ACF.Utilities.Messages
 
     -- The entity clamps this again server-side (VerifyData in init.lua); the note is only so the player knows.
+    local DefR, DefG, DefB = ACFLazers.GetPPCBallColor()
+
     local Data = {
         Caliber = ply:GetInfoNum("acf_ppc_tool_caliber", ACFLazers.PPCNumber("PPCCaliberBase")),
+        BallR   = ply:GetInfoNum("acf_ppc_tool_ballr", DefR), -- 19: the ball's colour (clamped to whole 0..255 again server-side, in init.lua)
+        BallG   = ply:GetInfoNum("acf_ppc_tool_ballg", DefG),
+        BallB   = ply:GetInfoNum("acf_ppc_tool_ballb", DefB),
     }
 
     local clamped = ACFLazers.ClampPPCCaliber(Data.Caliber)
