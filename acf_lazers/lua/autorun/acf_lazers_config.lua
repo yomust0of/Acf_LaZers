@@ -963,10 +963,10 @@ table.Merge(ACFLazers.Config, {
     FlameFuelSmall      = 0.5,    -- litres of napalm per second at FlameCaliberMin (75 mm) ...
     FlameFuelBig        = 3.5,    -- ... and at FlameCaliberMax (225 mm). 2 L/s at 150 mm is on the straight line between the two, as asked. Set this to 2 if 2 L/s was meant for the biggest
     FlameNapalmDensity  = 0.9,    -- [GUESS] kg per litre of napalm (petrol is 0.832): what a full napalm tank weighs
-    FlameLifetime       = 3,      -- seconds. The projectile is deleted this long after the shot, whatever else is going on
-    FlameSpeedSmall     = 80,     -- m/s at FlameCaliberMin ...
-    FlameSpeedBig       = 150,    -- ... and at FlameCaliberMax
-    FlameDragMult       = 40,     -- (22.1: 40, was 4 in 22) times the drag of an ordinary ACF shell of the same caliber (a steel shell FlameDragRefLength calibers long). 1 = an ordinary shell
+    FlameLifetime       = 1.5,      -- seconds. The projectile is deleted this long after the shot, whatever else is going on
+    FlameSpeedSmall     = 50,     -- m/s at FlameCaliberMin ...
+    FlameSpeedBig       = 100,    -- ... and at FlameCaliberMax
+    FlameDragMult       = 200,     -- (22.1: 40, was 4 in 22) times the drag of an ordinary ACF shell of the same caliber (a steel shell FlameDragRefLength calibers long). 1 = an ordinary shell
     FlameDragRefLength  = 4,      -- [GUESS] calibers. The length of the "ordinary shell" the drag is measured against (ACF's drag coefficient is 0.0001 / (steel density x length)): longer = less drag
     FlameGravityMult    = 1,      -- 1 = ACF's gravity (the flame falls like a shell), 0 = it flies straight
     FlameSphereStart    = 16,     -- units. The sphere's diameter when the projectile leaves the gun (the same at every size) ...
