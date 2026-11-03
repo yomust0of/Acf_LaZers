@@ -23,10 +23,6 @@ table.Empty(ACFLazers.Config)
 table.Merge(ACFLazers.Config, {
 
     -- ===================== SIZE ("caliber", in millimetres) =====================
-    -- The name you picked is "Lenze(TM) Diameter". That is only the TEXT on the tool slider (SizeLabel below).
-    -- Identifiers, wire outputs and dupe keys still say "Caliber" on purpose: renaming those would break old dupes and any wiring / E2
-    -- that reads the "Caliber" output. Say the word if you want those renamed too.
-    -- (The TM sign is written as the byte codes \226\132\162 so this file stays plain ASCII and no editor can garble it.)
     SizeLabel       = "Lenze\226\132\162 Diameter",
     CaliberMin      = 20,     -- smallest lazer the tool can make
     CaliberMax      = 300,    -- biggest lazer the tool can make
@@ -41,7 +37,6 @@ table.Merge(ACFLazers.Config, {
     MassExponent    = 2,      -- was 3. (With the old 40 / 2300 kg ends, 2 gave 224 kg at 100 mm; with your 60 / 9000 it gives 790 kg)
 
     -- ===================== ACF HEALTH / ARMOUR =====================
-    -- Gun-style, copied from acf_gun/init.lua:1344-1364 [SEEN]:
     --   armour (mm) = caliber * ACF.ArmorMod        health = surface area / ACF.Threshold
     -- These two multipliers let you scale them without touching code. 1 = exactly like an ACF gun.
     -- (This is your "lazer volume multiplier": ACF guns have no ductility value, so these two knobs are the whole story.)
@@ -79,10 +74,6 @@ table.Merge(ACFLazers.Config, {
     FocalFarEndFraction   = 1 / 3, -- damage at the lazer's effective range, as a fraction of the normal max
     FocalBoostMax         = 1.4,   -- centre damage at the sharpest focus amount (1.4 = 1.4x the normal max)
     -- AUTOMATIC FOCUS [CHANGED 23] (16.1). While a lazer fires, its focal length MOVES BY ITSELF toward the distance of the first thing its beam hits, like a slow camera autofocus. The tool's Focal Length slider
-    -- (and a dupe's saved value) is where the lazer STARTS; the number it has moved to is what a dupe saves from then on. The focal length is always held inside the same limits as the slider
-    -- (FocalMin up to FocalMaxFraction of the effective range for that size, see ACFLazers.GetFocalLimits), so a wall 50 units away focuses it to FocalMin and the sky leaves it where it is. The damage of a
-    -- tick is worked out with the focal length the lazer had at the START of that tick (the move for this tick's hit is made at the end of the tick, so the focus is one tick behind).
-    -- Both knobs are OPTIONAL: a config without them means ON and 1000.
     LazerAutoFocus  = true, -- false (or 0) = the focal length never moves by itself (the 16 and older behaviour)
     LazerFocusSpeed = 1000, -- units per second the focal length can move. 0 = frozen (same as off). A beam that hits nothing leaves it where it is.
 
@@ -103,10 +94,6 @@ table.Merge(ACFLazers.Config, {
     -- WHAT THE BEAM CAN SEE (trace mask).
     -- The beam is found with a trace (acf_lazer/init.lua, ENT:FireLaserBeam) and a trace only hits what its MASK lists. The lazer used MASK_SHOT on its own.
     -- ACF's own bullets never do: they trace with MASK_SOLID, and bullets under 3 cm trace with "MASK_SOLID and MASK_SHOT"
-    -- [SEEN acf/ballistics/ballistics_sv.lua:146-150; the 3 is in cm: acf/core/round_functions.lua:57 says "Bullet caliber will have to stay in cm"].
-    -- MASK_SHOT is the only one of these that contains CONTENTS_HITBOX (the shapes used for hit boxes), and ACF's own acf/compatibility/trace_workaround.lua:13 lists
-    -- "MASK_SHOT ignores all entities" as a known issue. Reason for the change: you reported that freshly parented / re-duped props are hit by ACF's guns but passed straight through by the lazer,
-    -- and this mask is the one difference I found between the two traces (same function ACF.trace, same filter style). [GUESS] that the hit-box bit is why those props were skipped: to be confirmed in game.
     -- Now the lazer asks for what an ACF round of its size asks for:
     --    caliber BELOW this number (mm)  -> MASK_SOLID and MASK_SHOT   (no hit-boxes; thin grates / fences are see-through, like small ACF rounds)
     --    caliber at or above it          -> MASK_SOLID                  (no hit-boxes; grates / fences stop the beam, like bigger ACF rounds)
@@ -133,28 +120,6 @@ table.Merge(ACFLazers.Config, {
     -- so every plate up to 100 mm took the full damage: that is why things were being obliterated.) The pass-through line (PenArmourFraction below) is a separate knob.
     PenetrationPerMM  = 0.3,  -- your request (was 1.0): ACF counts the lazer as about a third of its caliber, in mm of penetration
 
-    -- PASS-THROUGH RULE (for normal lazers; burst lazers may get their own numbers later):
-    --   * The beam STOPS on the first armoured prop it hits. It only gets through if that prop's CURRENT armour (mm) is below "the line":
-    --     PenArmourFraction x the lazer's caliber (mm) x THE DAMAGE MULTIPLIER AT THAT HIT.  The multiplier is the very same number the damage gets at that distance
-    --     (the focal curve x the distance falloff, init.lua ENT:CalculateDamageMult), so the line rises and falls with the damage: at multiplier 1 it is exactly PenArmourFraction x caliber
-    --     (1/3 of the caliber), at 0.5 half of that, and where the beam has faded to 0 nothing can be pierced any more (ACFLazers.GetPassLine does the sum).
-    --     ACF lowers a plate's armour as the plate loses health (never below half of its original).
-    --   * The plate being burned through takes the NORMAL damage (at its own multiplier).
-    --   * Everything BEHIND it takes the SAME damage multiplier that plate took (focal curve x falloff at THAT plate's distance, remembered when the beam went through),
-    --     times a slice of it, so the damage behind = the damage at the first plate's multiplier x the slice, whatever distance the things behind are at (the usual angle effect of each
-    --     prop it lands on still applies to it). The slice slides:
-    --       armour exactly on the line                        -> nothing
-    --       armour at PenRampEnd x the line (or lower)        -> the full PenDamageFraction
-    --       in between                                        -> a straight line between those two
-    --     Nothing behind it catches fire. People behind the plate follow the same rule.
-    --   * A beam can burn through ONE prop only. The next prop that survives it stops it (it still takes the weakened damage).
-    --   * A prop that is DESTROYED never blocks the beam and does not use up the one burn-through.
-    --   * People, NPCs and things ACF ignores (holograms, E2...) never block the beam and don't use up the burn-through either.
-    -- Examples (100 mm lazer HIT AT DAMAGE MULTIPLIER 1, fraction 1/3 -> the line is 33 mm of armour, PenRampEnd 1/2 -> full damage at 16.7 mm; at multiplier 0.6 the line is 20 mm and so on):
-    --   * a 10 mm plate is under the line from the very first tick: the beam goes through it, and what is behind takes the full 1/4 (of the damage at the multiplier the 10 mm plate took).
-    --   * a 25 mm plate also goes through at once, but what is behind takes about half of the 1/4.
-    --   * a 40 mm plate holds the beam until damage has worn its armour under 33 mm, then the beam goes through.
-    --   * a 100 mm plate never wears below 50 mm, so it is never pierced (only destroyed). Same for anything over 66 mm. That is on purpose.
     PenArmourFraction = 1 / 3,  -- [GUESS] starting value: the line, as a fraction of the caliber, AT DAMAGE MULTIPLIER 1: the real line at a hit is this x the damage multiplier there
     PenDamageFraction = 1 / 4,  -- [GUESS] starting value: most that the stuff behind a pierced plate takes, as a fraction of normal
     PenRampEnd        = 1 / 2,  -- [GUESS] starting value: the weakened damage reaches its full PenDamageFraction when armour is this fraction of the line
@@ -346,25 +311,6 @@ table.Merge(ACFLazers.Config, {
     --       spin-up, 0 -> 100%          8 s              15 s
     --       longest wait after a PPC    3 s              5 s            (the shortest wait is FusionPPCDelayMin, 1 s, for both)
     --       how hard a PPC hits it      x1.0             x0.5           (FusionPPCScalar, see below)
-    -- ENERGY. kJ per second = rated hp x GenKJPerHP (5.2) x the OPERATING PERCENT, shared out (the generator's water-fill) into the free room of the whole capacitor group it is linked to. 6500 hp at 100% =
-    -- 33,800 kJ/s, 250 hp = 1,300 kJ/s. Nothing is made (and no heat) while the capacitors have no room, while their AllowCharge is off, or while the engine is NOT PARENTED (FusionNeedsParent: an engine that is
-    -- not parented to something will not run at all, so a vehicle that is still being spawned in or built cannot blow up: a pasted dupe has to be parented first).
-    -- OPERATING PERCENT. The Active wire input (nothing wired = FusionActiveDefault) is a THROTTLE from 0 to 1 [17]: the operating percent the engine is asked to hold (0 = off, 1 = 100%, 0.4 = 40%; over 1 counts as 1).
-    -- While it is over 0 the operating percent climbs from where it is toward its TARGET at 1 / spin-up per second (8 s for the smallest, 15 s for the biggest, 0 -> 100%). The target is the LOWER of the throttle
-    -- and the engine's CEILING = its EFFICIENCY: the health efficiency (1 at full health, FusionDamagedEfficiency at 0%) times the heat efficiency (1 up to FusionHeatEffStart of the critical heat, falling in a
-    -- straight line to FusionHeatEffAtCritical at the critical heat). A lower throttle means less energy and, as its charge follows the operating percent (22: the heat follows the charge), less heat, so a player can hold a hot engine down. Over its target (a lowered
-    -- throttle, damage or heat) it falls toward the target at FusionSpinDownMult times the spin-up rate; at a throttle of 0 it falls to 0 the same way.
-    -- DAMAGED ENGINES MAKE MORE HEAT [17, 22]. The heat multiplier is 1 at full health ... FusionDamagedHeatMult (5) at 0% health, a straight line: a damaged engine wastes more of its energy as heat.
-    -- PPC HITS. When a PPC detonates within FusionPPCRange units of the engine, the operating percent is CUT at once by (the PPC's heat percent per shot, GetPPCHeatPct, as a fraction: 67.8% for a 50 mm, 100%
-    -- for a 300 mm) x the engine's PPC scalar x FusionPPCCutMult; it cannot grow again for a random time between FusionPPCDelayMin and the engine's longest wait (a new hit in the meantime rolls a new wait), and then
-    -- climbs back at its normal spin-up rate toward its ceiling. A protected (safezone) engine is not touched.
-    -- HEAT [22: STATIC]. The engine heats ITSELF all the time by its STATIC HEAT = FusionStaticHeat (0.15) x its standard heat (FusionHeatScalar x the rated kJ/s) x its CHARGE PERCENT x the damage multiplier above. It does not matter whether the
-    -- capacitors have room: a full engine on full capacitors is just as hot. The charge follows the operating percent up and drains slowly (CHARGE below), so the heat does too. (17 to 21 made FusionHeatScalar kJ per kJ put into
-    -- the capacitors instead; FusionEnergyHeatMult 1 brings that back on top.) It holds heat like any part (mass x HeatSpecificHeat) and cools by itself. At FusionCriticalF
-    -- (Fahrenheit) it is at its critical heat: it DETONATES (unless it is in a safezone: a safezone engine cannot explode).
-    -- CHARGE. The energy it holds inside. It follows the operating percent up (charge = operating percent x rated kJ/s x FusionChargeSeconds) but only drains slowly when the operating percent falls (the whole store in
-    -- FusionChargeDrainSeconds), so switching it off, a PPC hit or a spin-down does not empty it at once. When the engine explodes (critical heat, or destroyed) the charge becomes an ACF explosion: filler kg =
-    -- charge kJ x FusionBlastMult / ACF.HEPower (the capacitor's rule). An engine in a safezone, or with no charge, does not hurt anything.
     FusionModel         = "models/lasers/fusion.mdl", -- the model. If the file is missing the fusion engine refuses to spawn and says so. Scaled by the slider
     FusionHPMin         = 100,    -- [YOUR VALUE, shipped 250] smallest rated power the slider makes (hp of a generator hub)
     FusionHPMax         = 6500,   -- biggest rated power (hp)
