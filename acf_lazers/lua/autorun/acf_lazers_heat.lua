@@ -67,6 +67,30 @@ function Heat.GetCoolMult(ent)
     return 1
 end
 
+--- [22] When the fire a flamethrower lit on this PLAIN prop (not an "acf_" entity) goes out, as a CurTime(); nil when it is not on fire from one. ACF's own entities cool the way they always did.
+function Heat.GetFireUntil(ent)
+    local untilTime = ent.ACFL_FireUntil
+
+    if not untilTime then return nil end
+
+    local class = ent.GetClass and ent:GetClass() or ""
+
+    if string.sub(class, 1, 4) == "acf_" then return nil end
+
+    return untilTime
+end
+
+--- [22] How fast this entity cools right now compared to normally: FlameCoolMult (0.5) while it is on fire from a flamethrower and is a plain prop, else 1.
+function Heat.GetFireMult(ent, now)
+    local untilTime = Heat.GetFireUntil(ent)
+
+    if untilTime and (now or CurTime()) < untilTime then
+        return ACFLazers.FlameNumber and ACFLazers.FlameNumber("FlameCoolMult") or 1
+    end
+
+    return 1
+end
+
 --- Brings the record up to `now`: cools it for the time that passed. Returns the kJ above room temperature (0 when there is no record).
 local function Settle(ent, now)
     local kj = ent.ACFL_HeatKJ
@@ -78,9 +102,14 @@ local function Settle(ent, now)
     if dt > 0 then
         local capacity = Heat.GetCapacity(ent)
 
-        kj = ACFLazers.HeatCool(kj / capacity, dt, Heat.GetCoolMult(ent)) * capacity
+        -- [22] a plain prop on fire from a flamethrower cools FlameCoolMult as fast until its fire is out: the time before and after that moment is cooled at its own rate (the cooling law is exact, so the two add up)
+        local fireMult = ACFLazers.FlameNumber and ACFLazers.FlameNumber("FlameCoolMult") or 1
+
+        kj = ACFLazers.HeatCoolBurning(kj / capacity, ent.ACFL_HeatT, now, Heat.GetCoolMult(ent), Heat.GetFireUntil(ent), fireMult) * capacity
         ent.ACFL_HeatKJ = kj
         ent.ACFL_HeatT  = now
+
+        if ent.ACFL_FireUntil and ent.ACFL_FireUntil <= now then ent.ACFL_FireUntil = nil end
     end
 
     return kj
@@ -146,6 +175,21 @@ function Heat.Add(ent, kJ)
     Register(ent)
 
     return kj
+end
+
+--- [22] Puts a plain prop "on fire" for `seconds` from a flamethrower: it cools FlameCoolMult as fast until then. Never shortens a fire that lasts longer. The heat so far is worked out at the old rate first.
+function Heat.SetFire(ent, seconds)
+    if not IsValid(ent) then return end
+
+    seconds = tonumber(seconds) or 0
+
+    if seconds ~= seconds or seconds <= 0 then return end
+
+    local now = CurTime()
+
+    Settle(ent, now)
+
+    ent.ACFL_FireUntil = math.max(ent.ACFL_FireUntil or 0, now + seconds)
 end
 
 --- Sets the temperature in Fahrenheit (a test aid). At or under room temperature clears the record.
@@ -477,7 +521,7 @@ function Heat.Describe(ent)
         ownPct = -1, natural = 0, radKJps = 0, poolKJps = 0, machine = ACFLazers.IsHeatMachine(class),
     }
 
-    if riseK > 0 then d.natural = (riseK - ACFLazers.HeatCool(riseK, 1, Heat.GetCoolMult(ent))) * capacity end
+    if riseK > 0 then d.natural = (riseK - ACFLazers.HeatCool(riseK, 1, Heat.GetCoolMult(ent) * Heat.GetFireMult(ent, now))) * capacity end
 
     if class == "acf_lazer" then
         d.ownPct = riseK / math.max(ACFLazers.GetHeatRiseLazer(), 1e-6)

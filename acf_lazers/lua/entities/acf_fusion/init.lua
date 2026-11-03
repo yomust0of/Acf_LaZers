@@ -1,17 +1,21 @@
 -- =========================================================================
 -- ACF FUSION ENGINE: SERVER FILE
--- REBUILT (16.9). Goes to:  lua/entities/acf_fusion/init.lua   (on the SERVER, and in the game folder; restart the server after copying: a new entity folder is only read at start)
---           NEEDS the 16.9 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua. Without them the engine is still REGISTERED with ACF, but refuses to spawn and says why.
---           For the PPC to disturb engines, the 16.9 acf/entities/ammo_types/lazers_ppc.lua has to be on the server too.
+-- REBUILT (16.9), CHANGED (17: throttle, size curve, hum, damaged heat; 22: STATIC HEAT from the charge). Goes to:  lua/entities/acf_fusion/init.lua   (on the SERVER, and in the game folder; restart the server after copying: a new entity folder is only read at start)
+--           NEEDS the 22 config (lua/autorun/acf_lazers_config.lua) AND lua/autorun/acf_lazers_heat.lua. Without them the engine is still REGISTERED with ACF, but refuses to spawn and says why.
+--           For the PPC to disturb engines, the 16.9 (or newer) acf/entities/ammo_types/lazers_ppc.lua has to be on the server too.
 --
 -- THE ACF FUSION ENGINE. A self-powered energy source for the capacitors. The Fusion tool has one SLIDER (the rated power in hp, 250 .. 6500, the hp of a generator hub that would make the same energy);
--- the mass, the model scale, the spin-up time and the PPC numbers follow it on straight lines (see FUSION ENGINES in the config).
+-- the spin-up time and the PPC numbers follow it on straight lines; the mass and the model scale follow the SIZE CURVE (an inverse exponential blended with a straight line, FusionSizeCurve): small engines
+-- grow fast along the slider, big ones slowly (see FUSION ENGINES in the config).
 --   * links:    fusion engine <-> capacitor, with the same link tools as a generator hub (right-click the engine, then the capacitor; reload unlinks). Nothing else links to it.
---   * parent:   it only runs while it is PARENTED to something (FusionNeedsParent): a vehicle that is still being spawned in or built cannot blow up. Not parented = operating 0, no energy, no heat.
---   * wire:     input Active (nothing wired = FusionActiveDefault, on). Outputs: Energy, Rated, MaxEnergy, Load, Full, Operating (%), Efficiency (%), Charge (kJ), ChargePct, HeatKJ, HeatF, HeatPct, Parented
---   * operating percent: switched on, it climbs from 0 to 100% in 8 s (smallest) .. 15 s (biggest), toward its CEILING = its efficiency (health efficiency x heat efficiency). Switched off it falls the same way.
---   * energy:   kJ per second = hp x GenKJPerHP x operating percent, water-filled into the free room of the whole capacitor group (like a dump). No room = nothing is made and no heat.
---   * heat:     FusionHeatScalar (0.25) kJ of heat per kJ it puts into the capacitors. At FusionCriticalF (1500 F) it DETONATES.
+--   * parent:   it only runs while it is PARENTED to something (FusionNeedsParent): a vehicle that is still being spawned in or built cannot blow up. Not parented = operating 0 and no energy (its charge, and so its heat, drain away).
+--   * wire:     input Active, a THROTTLE from 0 to 1 = the operating percent the engine is asked to hold (nothing wired = FusionActiveDefault, full). Outputs: Energy, Rated, MaxEnergy, Load, Full, Operating (%), Efficiency (%), Charge (kJ), ChargePct, HeatKJ, HeatF, HeatPct, Parented
+--   * operating percent: it climbs from 0 to 100% in 8 s (smallest) .. 15 s (biggest), toward its TARGET = the lower of the Active throttle and its CEILING = its efficiency (health efficiency x heat efficiency).
+--               Switched off (Active 0), or over its target, it falls the same way.
+--   * energy:   kJ per second = hp x GenKJPerHP x operating percent, water-filled into the free room of the whole capacitor group (like a dump). No room = nothing is made (its static heat goes on: it follows the charge).
+--   * heat:     STATIC (22): every pass it heats itself by GetFusionStaticHeat per second = FusionStaticHeat (0.15) x FusionHeatScalar x the rated kJ/s x its CHARGE PERCENT x a health multiplier (1 at full health ... FusionDamagedHeatMult 5 at 0%),
+--               whether or not the capacitors have room. (FusionEnergyHeatMult 1 adds the old FusionHeatScalar kJ per kJ stored.) At FusionCriticalF (1500 F) it DETONATES.
+--   * hum:      a looping sound that follows the operating percent (volume, pitch) and the engine's size (louder, deeper, farther when bigger). FusionHum... in the config; "" for FusionHumSound = silent.
 --   * charge:   the energy it holds. Follows the operating percent up at once, drains away slowly (FusionChargeDrainSeconds) when the operating percent falls. It is the size of the bang when the engine
 --               explodes (critical heat, or destroyed): filler kg = charge kJ x FusionBlastMult / ACF.HEPower.
 --   * safezone: an engine inside a safezone (ACFLazers.IsProtectedBySafezone) cannot explode and is not touched by PPCs.
@@ -20,7 +24,7 @@
 -- All numbers live in lua/autorun/acf_lazers_config.lua (everything starting with Fusion...).
 -- =========================================================================
 
-local VERSION = "16.9"
+local VERSION = "22"
 
 -- The first line this file prints. If the server console does NOT show it after a restart, the server never ran this file (the folder lua/entities/acf_fusion/ is not on the SERVER, or the file
 -- has a syntax error: the console shows one then).
@@ -39,11 +43,12 @@ local Objects     = Damage.Objects
 local CFG  = ACFLazers and ACFLazers.Config
 local Heat = ACFLazers and ACFLazers.Heat
 
--- WHAT IS MISSING (16.9). This file NEVER stops loading because of a missing config: the engine is registered with ACF whatever happens below, and a spawn with something missing says what it is
+-- WHAT IS MISSING (16.9, 17). This file NEVER stops loading because of a missing config: the engine is registered with ACF whatever happens below, and a spawn with something missing says what it is
 -- (in the player's chat and the server console). In 16.8 a missing piece made this file return before the registration, which looks like "acf_fusion is not a registered ACF entity class".
 local NeedHelpers = {
     "FusionNumber", "GetFusionModel", "ClampFusionHP", "GetFusionScale", "GetFusionMass", "GetFusionRatedRate", "GetFusionRate", "GetFusionChargeMax", "GetFusionPPCCut", "GetFusionRecoveryDelay",
     "GetFusionEfficiency", "GetFusionRiseCritical", "StepFusionOperating", "StepFusionCharge", "GetFusionBlastFiller", "IsProtectedBySafezone", "WaterFill", "GetCapGroup", "GetHeatCapacity",
+    "GetFusionThrottle", "GetFusionTarget", "GetFusionHeatMult", "GetFusionHum", "GetFusionSizeFraction", "GetFusionStaticHeat", "GetFusionStandardHeat",
 }
 
 local Problem
@@ -51,7 +56,7 @@ local Problem
 if not CFG then
     Problem = "ACFLazers.Config is missing. Is lua/autorun/acf_lazers_config.lua installed on the SERVER?"
 elseif not (Heat and Heat.Add and Heat.GetPct) then
-    Problem = "the heat system is missing: copy lua/autorun/acf_lazers_heat.lua and the 16.9 lua/autorun/acf_lazers_config.lua to the SERVER, then restart."
+    Problem = "the heat system is missing: copy lua/autorun/acf_lazers_heat.lua and the 22 lua/autorun/acf_lazers_config.lua to the SERVER, then restart."
 else
     local missing = {}
 
@@ -60,7 +65,7 @@ else
     end
 
     if #missing > 0 then
-        Problem = "lua/autorun/acf_lazers_config.lua on the SERVER is older than this file (16.9): it has no " .. table.concat(missing, ", ") .. ". Copy the 16.9 config to the SERVER, then restart."
+        Problem = "lua/autorun/acf_lazers_config.lua on the SERVER is older than this file (22): it has no " .. table.concat(missing, ", ") .. ". Copy the 22 config to the SERVER, then restart."
     end
 end
 
@@ -74,9 +79,9 @@ local Engines = setmetatable({}, { __mode = "k" })
 
 -- ===================== WIRE =====================
 
--- The Active input as true / false. Nothing wired = FusionActiveDefault. [GUESS] that Wire keeps the entity a wire comes from in Inputs[name].Src (the generator and the capacitor's
+-- The Active input as the THROTTLE (17): the operating percent the engine is asked to hold, a fraction 0..1 (0 = off). Nothing wired = FusionActiveDefault. [GUESS] that Wire keeps the entity a wire comes from in Inputs[name].Src (the generator and the capacitor's
 -- AllowCharge rely on the same thing). Should this Wire not have it, the last value sent to TriggerInput is used as soon as one has arrived.
-function ENT:GetActive()
+function ENT:GetThrottle()
     local input = self.Inputs and self.Inputs.Active
     local value = ACFLazers.FusionNumber("FusionActiveDefault")
 
@@ -87,9 +92,12 @@ function ENT:GetActive()
         value = self.WireActive
     end
 
-    if value ~= value then value = 0 end -- NaN (a broken E2 can send one) means off
+    return ACFLazers.GetFusionThrottle(value) -- (NaN, which a broken E2 can send, and anything under 0 mean off; over 1 means full)
+end
 
-    return value > 0
+-- The Active input as true / false: asked for anything at all.
+function ENT:GetActive()
+    return self:GetThrottle() > 0
 end
 
 function ENT:TriggerInput(name, value)
@@ -117,7 +125,8 @@ function ENT:Initialize()
     self.Status      = "Not set up yet"
     self.CapStatus   = ""
     self.Efficiency  = 1       -- the ceiling of the operating percent: health efficiency x heat efficiency (as of the last pass)
-    self.IsOn        = false   -- the Active input as of the last pass
+    self.IsOn        = false   -- the Active input is over 0, as of the last pass
+    self.Throttle    = 1       -- the Active input as a fraction 0..1, as of the last pass (until the first pass it counts as full)
     self.IsParented  = false   -- parented as of the last pass
     self.AtCritical  = false   -- at or over the critical heat as of the last pass (only stays true in a safezone: anywhere else it explodes)
     self.PPCHits     = 0       -- PPC hits taken (a counter for tests and the hover text)
@@ -277,12 +286,14 @@ end
 function ENT:Run(now, dt)
     local hp       = self.RatedHP
     local parented = self:CheckParent()
-    local active   = self:GetActive()
+    local throttle = self:GetThrottle()
+    local active   = throttle > 0
     local ceiling  = self:GetCeiling()
+    local target   = ACFLazers.GetFusionTarget(throttle, ceiling)
 
-    -- 1. THE OPERATING PERCENT. Not parented = nothing at all. Otherwise it climbs toward the ceiling (when switched on and not waiting out a PPC hit) or falls.
+    -- 1. THE OPERATING PERCENT. Not parented = nothing at all. Otherwise it climbs toward its target (the lower of the throttle and the ceiling; when switched on and not waiting out a PPC hit) or falls.
     if parented then
-        self.Operating = ACFLazers.StepFusionOperating(self.Operating, dt, hp, active, ceiling, now >= self.RecoverAt)
+        self.Operating = ACFLazers.StepFusionOperating(self.Operating, dt, hp, active, target, now >= self.RecoverAt)
     else
         self.Operating = 0
     end
@@ -298,11 +309,18 @@ function ENT:Run(now, dt)
         storedKJ = math.min(ACFLazers.GetFusionRate(hp, self.Operating) * dt, room)
     end
 
+    -- 3b. THE HEAT [22]: static. It follows the charge (just updated), not what went into the capacitors, so a full engine on full capacitors is as hot as one that is charging them.
+    local health  = self:GetHealthFraction()
+    local heatKJ  = ACFLazers.GetFusionStaticHeat(hp, self.Charge, health) * dt
+    local perKJ   = ACFLazers.FusionNumber("FusionEnergyHeatMult")
+
+    if storedKJ > 0 and perKJ > 0 then -- (17 to 21: FusionHeatScalar kJ of heat per kJ stored, times the health multiplier; now an option, off by default)
+        heatKJ = heatKJ + storedKJ * ACFLazers.FusionNumber("FusionHeatScalar") * ACFLazers.GetFusionHeatMult(health) * perKJ
+    end
+
+    if heatKJ > 0 then Heat.Add(self, heatKJ) end
+
     if storedKJ > 0 then
-        local scalar = ACFLazers.FusionNumber("FusionHeatScalar")
-
-        if scalar > 0 then Heat.Add(self, storedKJ * scalar) end
-
         local takes = ACFLazers.WaterFill(limits, storedKJ)
 
         for i, cap in ipairs(caps) do
@@ -318,7 +336,10 @@ function ENT:Run(now, dt)
     self.Room       = room
     self.Refusing   = refusing
     self.IsOn       = active
+    self.Throttle   = throttle
     self.IsParented = parented
+
+    self:SafeUpdateHum()
 
     self:UpdateStatus(now, room)
 
@@ -346,12 +367,29 @@ function ENT:UpdateStatus(now, room)
         self.Status = self.Operating > 0 and string.format("Switching off: operating %.0f%%", self.Operating * 100) or "Off (the Active input is 0)"
     elseif now < self.RecoverAt then
         self.Status = string.format("Disrupted by a PPC: waiting %.1f s to recover", self.RecoverAt - now)
-    elseif self.Operating < self.Efficiency - 1e-6 then
-        self.Status = string.format("Spinning up: operating %.0f%% of a possible %.0f%%", self.Operating * 100, self.Efficiency * 100)
-    elseif self.Operating > self.Efficiency + 1e-6 then
-        self.Status = string.format("Over its ceiling (health or heat): falling toward %.0f%%", self.Efficiency * 100)
     else
-        self.Status = string.format("Running at %.0f%%", self.Operating * 100)
+        -- 17: when the Active input asks for less than the engine could do, the throttle is what it steers toward; otherwise the ceiling (health x heat) is.
+        local ask       = ACFLazers.GetFusionThrottle(self.Throttle)
+        local target    = ACFLazers.GetFusionTarget(ask, self.Efficiency)
+        local throttled = ask < self.Efficiency - 1e-6
+
+        if self.Operating < target - 1e-6 then
+            if throttled then
+                self.Status = string.format("Spinning up to the Active input's %.0f%%: operating %.0f%%", ask * 100, self.Operating * 100)
+            else
+                self.Status = string.format("Spinning up: operating %.0f%% of a possible %.0f%%", self.Operating * 100, self.Efficiency * 100)
+            end
+        elseif self.Operating > target + 1e-6 then
+            if throttled then
+                self.Status = string.format("Spinning down to the Active input's %.0f%%: operating %.0f%%", ask * 100, self.Operating * 100)
+            else
+                self.Status = string.format("Over its ceiling (health or heat): falling toward %.0f%%", self.Efficiency * 100)
+            end
+        elseif throttled then
+            self.Status = string.format("Running at %.0f%% (the Active input asks for %.0f%%)", self.Operating * 100, ask * 100)
+        else
+            self.Status = string.format("Running at %.0f%%", self.Operating * 100)
+        end
     end
 
     if next(self.Caps) == nil then
@@ -440,11 +478,20 @@ function ENT:ACF_UpdateOverlayState(State)
     if self.AtCritical then State:AddError("Critical heat: it would explode, but it is in a safezone") end
 
     State:AddProgressBar("Operating", math.Round(self.Operating * 100, 1), 100, "%")
+    State:AddKeyValue("Active input", string.format("%.0f%% asked for", ACFLazers.GetFusionThrottle(self.Throttle) * 100))
     State:AddProgressBar("Charge", math.Round(self.Charge, 1), math.Round(most, 1), " kJ")
     State:AddKeyValue("Rated power", string.format("%d hp of a generator hub (%.0f kJ/s at 100%%)", hp, ACFLazers.GetFusionRatedRate(hp)))
     State:AddKeyValue("Making", string.format("%.0f kJ/s", self.EnergyRate))
     State:AddKeyValue("Efficiency ceiling", string.format("%.0f%% (health x%.2f, heat x%.2f)", self.Efficiency * 100, ACFLazers.GetFusionHealthEfficiency(self:GetHealthFraction()), ACFLazers.GetFusionHeatEfficiency(heatFrac)))
     State:AddKeyValue("Explosive content", string.format("%.2f kg of HE", ACFLazers.GetFusionBlastFiller(self.Charge)))
+    local heatMult   = ACFLazers.GetFusionHeatMult(self:GetHealthFraction())
+    local staticHeat = ACFLazers.GetFusionStaticHeat(hp, self.Charge, self:GetHealthFraction())
+    local perKJ      = ACFLazers.FusionNumber("FusionEnergyHeatMult")
+    local heatText   = string.format("%.0f kJ/s from its charge (%.0f%% charged, x%.2f from damage)", staticHeat, most > 0 and self.Charge / most * 100 or 0, heatMult)
+
+    if perKJ > 0 then heatText = heatText .. string.format(" + %.0f kJ/s from the energy it makes", ACFLazers.FusionNumber("FusionHeatScalar") * heatMult * perKJ * self.EnergyRate) end
+
+    State:AddKeyValue("Heat made", heatText)
     State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of its critical heat, %g F)", Heat.GetTempF(self), heatFrac * 100, ACFLazers.FusionNumber("FusionCriticalF")))
     State:AddKeyValue("Linked", string.format("%d capacitor(s)", linkedCaps))
 
@@ -466,7 +513,7 @@ end
 function ENT:RefreshOverlay()
     local most      = math.max(ACFLazers.GetFusionChargeMax(self.RatedHP), 1e-6)
     local signature = self.Status .. "|" .. self.CapStatus .. "|" .. self.RatedHP .. "|" .. math.floor(self.EnergyRate / 10) .. "|" .. math.floor(self.Operating * 100) .. "|" .. math.floor(self.Efficiency * 100)
-        .. "|" .. math.floor(self.Charge / most * 100) .. "|" .. math.floor(self:GetHeatFraction() * 20) .. (self.AtCritical and "c" or "")
+        .. "|" .. math.floor(self.Charge / most * 100) .. "|" .. math.floor(self:GetHeatFraction() * 20) .. (self.AtCritical and "c" or "") .. "|" .. math.floor(ACFLazers.GetFusionThrottle(self.Throttle) * 100)
 
     if signature ~= self.OverlaySig then
         self.OverlaySig = signature
@@ -573,8 +620,72 @@ function ENT:UnlinkAll()
     return count
 end
 
+-- ===================== HUM (17) =====================
+
+-- Stops the hum for good (nothing is left playing).
+function ENT:StopHum()
+    if self.HumSnd then
+        self.HumSnd:Stop()
+        self.HumSnd = nil
+    end
+end
+
+-- The hum follows the operating percent and the size (ACFLazers.GetFusionHum): silent at 0, otherwise a looping sound patch made once (its sound level has to be set BEFORE it starts playing) whose
+-- volume and pitch glide to the new numbers over one pass. It is made again when the sound file or the level (a resize) changes. [GUESS] that CreateSound loops this file by itself, as for the lazer's burn sound.
+function ENT:UpdateHum()
+    local hum  = ACFLazers.GetFusionHum(self.RatedHP, self.Operating)
+    local name = ACFLazers.GetFusionHumSound()
+
+    if self.Exploding or not hum.on or name == "" then
+        self:StopHum()
+
+        return
+    end
+
+    if self.HumSnd and (self.HumName ~= name or self.HumLevel ~= hum.level) then self:StopHum() end
+
+    local glide = ACFLazers.FusionNumber("FusionThinkInterval")
+
+    if not self.HumSnd then
+        local snd = CreateSound(self, name)
+
+        if not snd then return end
+
+        snd:SetSoundLevel(hum.level)
+        snd:PlayEx(hum.volume, hum.pitch)
+
+        self.HumSnd, self.HumName, self.HumLevel, self.HumVolume, self.HumPitch = snd, name, hum.level, hum.volume, hum.pitch
+    elseif not self.HumSnd:IsPlaying() then -- (the engine stops a patch now and then, e.g. on a map cleanup)
+        self.HumSnd:PlayEx(hum.volume, hum.pitch)
+        self.HumVolume, self.HumPitch = hum.volume, hum.pitch
+    else
+        -- only while the operating percent really moves: a steady engine sends nothing, and a settled one ends exactly on its number
+        if math.abs(hum.volume - self.HumVolume) > 1e-4 then
+            self.HumSnd:ChangeVolume(hum.volume, glide)
+            self.HumVolume = hum.volume
+        end
+
+        if math.abs(hum.pitch - self.HumPitch) > 0.01 then
+            self.HumSnd:ChangePitch(hum.pitch, glide)
+            self.HumPitch = hum.pitch
+        end
+    end
+end
+
+-- A sound that goes wrong must never stop the engine from working (and spam the console only once).
+function ENT:SafeUpdateHum()
+    local ok, err = pcall(self.UpdateHum, self)
+
+    if not ok and not self.HumFailed then
+        self.HumFailed = true
+        ErrorNoHalt("[acf_fusion] the hum failed: " .. tostring(err) .. "\n")
+    end
+end
+
 function ENT:OnRemove()
     Engines[self] = nil
+
+    self:StopHum()
 
     -- Straight table clean-up instead of ACF.PerformClassUnlink: the entity is on its way out and we only need everybody to forget it.
     for Cap in pairs(self.Caps) do

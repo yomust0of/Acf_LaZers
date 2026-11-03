@@ -1,5 +1,5 @@
 -- =========================================================================
--- REBUILT (16.9). Goes to:  lua/weapons/gmod_tool/stools/acf_fusion_tool.lua
+-- REBUILT (16.9), CHANGED (17). Goes to:  lua/weapons/gmod_tool/stools/acf_fusion_tool.lua
 --
 -- THE FUSION ENGINE TOOL (based on the generator tool). ONE SLIDER: the rated power in hp (FusionHPMin 250 .. FusionHPMax 6500, the hp of a generator hub that would make the same energy). The mass, the model
 -- scale, the spin-up time and the PPC numbers follow the slider on straight lines (FUSION ENGINES in the config).
@@ -20,7 +20,7 @@ TOOL.Name = "Fusion Engine Spawner"
 local Config = ACFLazers and ACFLazers.Config
 assert(Config, "[acf_fusion_tool] lua/autorun/acf_lazers_config.lua is missing or did not load")
 assert(ACFLazers.LinkKit, "[acf_fusion_tool] lua/autorun/acf_lazers_linkkit.lua is missing or did not load")
-assert(ACFLazers.GetFusionReadout and ACFLazers.ClampFusionHP and ACFLazers.FusionNumber, "[acf_fusion_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no 16.9 fusion helpers). Copy the config of the same batch (16.9).")
+assert(ACFLazers.GetFusionReadout and ACFLazers.ClampFusionHP and ACFLazers.FusionNumber and ACFLazers.GetFusionHeatMult and ACFLazers.GetFusionStaticHeat, "[acf_fusion_tool] lua/autorun/acf_lazers_config.lua is older than this file (it has no 22 fusion heat helper). Copy the config of the same batch (22).")
 
 TOOL.ClientConVar["hp"] = ACFLazers.FusionNumber("FusionHPDefault")
 
@@ -142,7 +142,7 @@ if CLIENT then
     function TOOL.BuildCPanel(panel)
         panel:AddControl("Header", { Text = "ACF Fusion Engine Configuration", Description = "Tune settings before spawning." })
 
-        -- The rated power is also the size: the mass, the model scale, the spin-up time and the PPC numbers follow it on straight lines (FUSION ENGINES in the config).
+        -- The rated power is also the size: the mass and the model scale follow it on the size curve (inverse exponential, FusionSizeCurve), the spin-up time and the PPC numbers on straight lines (FUSION ENGINES in the config).
         panel:NumSlider("Rated power (hp)", "acf_fusion_tool_hp", ACFLazers.FusionNumber("FusionHPMin"), ACFLazers.FusionNumber("FusionHPMax"), 0)
 
         -- The big readout. [KNOW] DForm:AddItem(panel) puts a panel on its own full-width row; a DPanel with its own Paint draws whatever we tell it to.
@@ -163,11 +163,11 @@ if CLIENT then
             local show = Readout()
 
             if IsValid(info) then
-                info:SetText(string.format("A %d hp fusion engine: model scale %.2f, mass %s kg. Switched on (the Active wire input), its operating percent climbs from 0 to 100%% in %.1f seconds, "
-                    .. "never higher than its efficiency (full health and low heat = 100%%; it explodes at %g F). It makes %s kJ/s at 100%%, and a quarter of what it puts into the capacitors "
-                    .. "is heat in itself. A PPC going off within %g units cuts its operating percent (%.0f%% for a 50 mm shot, %.0f%% for a 300 mm one) and it waits %g to %.1f seconds before climbing back. "
+                info:SetText(string.format("A %d hp fusion engine: model scale %.2f, mass %s kg. Its Active wire input (0 to 1) is the operating percent it is asked to hold; its operating percent climbs toward that from 0 in %.1f seconds for 100%%, "
+                    .. "never higher than its efficiency (full health and low heat = 100%%; it explodes at %g F). It makes %s kJ/s at 100%%, and it heats itself all the time by its charge: %s kJ/s of heat at a full charge "
+                    .. "(%s kJ/s when it is wrecked), less at a lower charge, whether or not the capacitors have room. A PPC going off within %g units cuts its operating percent (%.0f%% for a 50 mm shot, %.0f%% for a 300 mm one) and it waits %g to %.1f seconds before climbing back. "
                     .. "Its charge (up to %s kJ) is the size of the explosion if it blows up, and drains away slowly when it is switched off. The reference capacitor holds %s kJ.",
-                    show.hp, show.scale, Commas(show.mass), show.spinUp, show.criticalF, Commas(show.rate), ACFLazers.FusionNumber("FusionPPCRange"),
+                    show.hp, show.scale, Commas(show.mass), show.spinUp, show.criticalF, Commas(show.rate), Commas(show.staticHeat), Commas(show.staticHeatDamaged), ACFLazers.FusionNumber("FusionPPCRange"),
                     show.ppcCutSmall * 100, show.ppcCutBig * 100, show.recoveryMin, show.recoveryMax, Commas(show.chargeMax), Commas(show.capacity)))
             end
         end
@@ -176,7 +176,7 @@ if CLIENT then
         Refresh()
 
         panel:Help("Link the fusion engine to a capacitor with the right-click (the engine first, then the capacitor), and the capacitor to a lazer. The engine only runs while it is PARENTED to something: "
-            .. "parent it to its vehicle with the parent tool. The Active wire input (1 = on) switches it on; nothing wired counts as on. Wire outputs: Operating, Efficiency, Charge, ChargePct, HeatPct, Energy, Parented and more.")
+            .. "parent it to its vehicle with the parent tool. The Active wire input is a throttle: 0 = off, 1 = full, in between = the operating percent it is asked to hold (less operating, less energy and less heat); nothing wired counts as full. Wire outputs: Operating, Efficiency, Charge, ChargePct, HeatPct, Energy, Parented and more.")
     end
 end
 
@@ -286,7 +286,7 @@ function TOOL:LeftClick(trace)
         phys:EnableMotion(false)
     end
 
-    Say(ply, "Info", "Fusion engine spawned. It will not run until it is PARENTED to something (use the parent tool). Wire its Active input to switch it on (nothing wired counts as on).")
+    Say(ply, "Info", "Fusion engine spawned. It will not run until it is PARENTED to something (use the parent tool). Wire its Active input (0 to 1) to throttle it (nothing wired counts as full).")
 
     return true
 end

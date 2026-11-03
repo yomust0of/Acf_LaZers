@@ -60,6 +60,13 @@ function Kit.UnlinkAll(ent)
 
     local count = 0
 
+    -- [22] a fuel tank lets go of its flamethrowers (the engines linked to a petrol tank are not ours to break)
+    if ent.Engines and ent:GetClass() == "acf_fueltank" then
+        for other in pairs(ent.Engines) do
+            if IsValid(other) and other:GetClass() == "acf_flamer" and ACF.PerformClassUnlink(other, ent) then count = count + 1 end
+        end
+    end
+
     if ent.ACFGenerators then
         for gen in pairs(ent.ACFGenerators) do
             if IsValid(gen) and ACF.PerformClassUnlink(gen, ent) then count = count + 1 end
@@ -73,7 +80,7 @@ if CLIENT then
     -- The info lines and chat texts. `left` is that tool's own left-click line.
     function Kit.AddLanguage(mode, left)
         language.Add("tool." .. mode .. ".left", left)
-        language.Add("tool." .. mode .. ".right", "Link: click an engine, generator, capacitor, lazer, PPC or radiator first (it turns green), then click what to link everything green to (engine > generator > capacitor > lazer or PPC; radiator <-> radiator)")
+        language.Add("tool." .. mode .. ".right", "Link: click an engine, generator, capacitor, lazer, PPC, radiator, flamethrower or fuel tank first (it turns green), then click what to link everything green to (engine > generator > capacitor > lazer or PPC; radiator <-> radiator; flamethrower <-> napalm tank)")
         language.Add("tool." .. mode .. ".right_shift", "(Hold Shift) Add another thing to the selection, or take a selected thing off it")
         language.Add("tool." .. mode .. ".reload", "Unlink: aim at the one to unlink the selected things from (nothing selected = break all links of what you aim at)")
         language.Add("tool." .. mode .. ".0", "Left-click: " .. left .. ".  Right-click: select / link.  Shift + right-click: select more.  Reload: unlink.")
@@ -296,7 +303,7 @@ function Kit.Install(TOOL, mode, left)
         if not Kit.IsLinkable(hit) then
             UnselectAll(self)
 
-            Say(ply, "Info", "Link: selection cleared. Aim at an engine, a generator, a capacitor, a lazer, a PPC or a radiator.")
+            Say(ply, "Info", "Link: selection cleared. Aim at an engine, a generator, a capacitor, a lazer, a PPC, a radiator, a flamethrower or a fuel tank.")
 
             return false
         end
@@ -348,7 +355,7 @@ function Kit.Install(TOOL, mode, left)
         local hit = trace.Entity
 
         if not Kit.IsLinkable(hit) then
-            Say(ply, "Info", "Unlink: aim at an engine, a generator, a capacitor, a lazer, a PPC or a radiator.")
+            Say(ply, "Info", "Unlink: aim at an engine, a generator, a capacitor, a lazer, a PPC, a radiator, a flamethrower or a fuel tank.")
 
             return false
         end

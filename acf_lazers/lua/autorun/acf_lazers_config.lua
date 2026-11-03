@@ -144,6 +144,19 @@
 --      held to 1 for every size (only the range grew). MuzzlePitchSmall is 255 now (the whole size range slopes from 255 to MuzzlePitchBig 180) and the engine's volume is the loudness divided by the BIGGER of
 --      MuzzleVolumeSmall and MuzzleVolumeBig (the biggest lazer at 1, the smallest at 1.4 / 2.4 = 0.58); the range still grows by MuzzleDbPerDoubling. New helper GetMuzzleSound(caliber); the lazer
 --      starts the hum with PlayEx(volume, pitch) instead of Play and two Change calls.
+--   37 (22) THE FLAMETHROWER. (a) New entity acf_flamer (model models/lasers/flamer.mdl, 75 to 225 mm = scale 0.5 to 1.5; the knobs are all the Flame... ones) that burns NAPALM, a new ACF fuel type (lua/acf/entities/fuel_types/napalm.lua),
+--      from ACF's own scalable fuel tanks linked to it (litres per second FlameFuelSmall 0.5 at 75 mm .. FlameFuelBig 3.5 at 225 mm: 2 at 150). LinkClasses gets acf_flamer and acf_fueltank. (b) Its projectile (lua/acf/entities/ammo_types/lazers_flame.lua)
+--      is one of ACF's own with gravity, FlameDragMult 40 (22.1; 22: 4) times a shell's drag and a 3 second life (FlameLifetime), 7 a second (FlameShotsPerSecond), 80 .. 150 m/s (FlameSpeedSmall .. Big). It carries a SPHERE (FlameSphereStart 16 units across,
+--      growing to FlameSphereGrow 3 times that over its life) that touches props and ACF parts (heat FlameHeatSmall .. Big percent of HOT, fire FlameIgniteSmall .. Big seconds, FlameHPSmall .. Big health once a part is over FlameDamageHeatPct 170%
+--      of HOT; the projectile ends FlameLinger 0.05 s after the first part) and people (FlamePlayerDamageSmall .. Big damage and fire; the projectile goes on). (c) A plain prop that is on fire cools FlameCoolMult (0.5) as fast (the heat store).
+--      (d) New helpers: FlameNumber / FlameString / FlameFlag / FlameSoundList / PickFlameSound, ClampFlameCaliber, GetFlame... (scale, mass, fuel, speed, drag, sphere, ignite, heat, hp, damage, gun pitch, muzzle), SimulateFlame, HeatCoolBurning,
+--      SegmentBoxDistance, SegmentTouchesBox, GetFlameReadout. Every Flame knob is OPTIONAL (the file has defaults).
+--   38 (22) THE FUSION ENGINE'S HEAT IS STATIC. The heat no longer comes from the energy it puts into the capacitors: it comes from its CHARGE. Every pass the engine heats itself by
+--      GetFusionStaticHeat = FusionStaticHeat (0.15, new) x its standard heat (GetFusionStandardHeat = FusionHeatScalar x the rated kJ/s, hp x GenKJPerHP) x charge / full store x GetFusionHeatMult(health), per second,
+--      whether or not the capacitors have room. FusionDamagedHeatMult is now 5 (was 2): a straight line from x1 at full health to x5 at none. The old heat per kJ stored is kept as a switch, FusionEnergyHeatMult (new, 0 = off,
+--      1 = as in 17 to 21, on top). The readout (GetFusionReadout) has three more fields: standardHeat, staticHeat, staticHeatDamaged.
+--   39 (22.1) THE FLAME DRAG IS 10 TIMES, AND THE FIRE WIDENS WITH THE SPHERE. FlameDragMult is 40 (was 4): the flame loses its speed and comes down much sooner. The fire sprites (FlameTrailSizeStart / FlameTrailSizeEnd, both 1 now, were 0.6 / 1.2)
+--      are as wide as the hit sphere: a sprite starts as wide as the sphere was when it was made and ends as wide as the sphere is when the sprite dies, so the fire grows from 16 units at the gun to 48 at the end of the flight, as the sphere does.
 --   (The numbering of earlier handoffs is gone: [CHANGED n] marks restart at 1 with every whole-number handoff.)
 --
 -- Tags used in comments:  [SEEN] read in the files   [KNOW] standard GMod   [GUESS] needs a test
@@ -152,7 +165,7 @@
 --   HeatCoolHotBoost 1.3 (shipped 1)   HeatLazerSmall 10 (shipped 5)   HeatLazerBig 30 (shipped 5)
 --   HeatLazerCapF 900 (shipped 1100)   HeatExplodeChance 0.8 (shipped 0.5)   HeatMaxDeltaTime 0.25 (shipped 0.5)
 --   FusionHPMin 100 (shipped 250)   FusionMaxPerPlayer 8 (shipped 40)   FusionMassSmall 600 (shipped 1500)   FusionHeatScalar 2.5 (shipped 0.25)   FusionScaleSmall 0.3 (shipped 0.25)
--- Everything else is the shipped 21 value (RadFlushKJPerLiter 125000 is the shipped one; the other five player limits are 40: capacitor, generator, radiator, lazer and PPC; the fusion engine limit is YOUR 8). 21 changed: FOUR SOUNDS. The generator HUMS: GenHumSound ambient/grinder/grinderloop_01.wav, quieter, higher and softer for a small hub and louder and deeper for a big one (GenHumVolumeSmall 0.35 / GenHumVolumeBig 1, GenHumPitchSmall 140 / GenHumPitchBig 70, GenHumLevelSmall 55 / GenHumLevelBig 85 dB, the size is the same model curve as the generator's scale), and it follows the load: at a trickle of load it plays at GenHumLoadFloor 0.4 of the volume and GenHumPitchIdle 0.85 of the pitch, and below GenHumMinLoad 0.01 it is silent. The PPC's fire burst is PPCFireSound beams/beamstart5.wav (the zap crackle stays) and a small PPC is quieter: PPCFireVolumeSmallMult 0.6 at PPCCurveStart 20 mm (a 50 mm PPC is at 0.64, a 100 mm one at 0.71), a straight line up to 1 at 300 mm (its pitch 125 to 75 was already there). The FUSION ENGINE's hum is FusionHumSound ambient/machines/refrigerator.wav (its pitch already follows its size: FusionHumPitchSmall 125 to FusionHumPitchBig 70). The LAZERS' sound scales again: MuzzlePitchSmall 255 (was 315, which the engine held to 255, so every lazer up to about 144 mm had the same pitch) and the engine volume is now the loudness divided by the larger of MuzzleVolumeSmall 1.4 and MuzzleVolumeBig 2.4 (it was min(loudness, 1) = 1 at every size), so the smallest lazer plays at 0.58 and the biggest at 1. 20 changed: the PPC BLAST HAS ITS OWN DAMAGE MODEL (the flag PPCOwnDamage, on; PPCBlastHealthSmall 2.2 and PPCBlastHealthBig 4.4 set the damage a part takes in multiples of ITS OWN base health, PPCArmourInfluence 0.25 is how much its armour counts: 0 = not at all, 1 = ACF's own law; the falloff is an INVERSE EXPONENTIAL, PPCFalloffRate 3, PPCFalloffBlend 1 = fully curved, 0 = the straight line), the PPC's SELF-DAMAGE IS 4 TIMES SLOWER (PPCHeatDamageMult 0.25) and is fast (PPCHeatOverfireMult 1) only for PPCHeatOverfireSeconds 5 after a shot that was fired while it was already over 100%, FusionSizeCurve 0.75 (was 1: the fusion model's size follows the inverse exponential 3/4 as much) and the fusion engine's MASS follows its rated power in a straight line (the size curve no longer touches it). 19 changed: the PPC BALL: PPCBallMaterial models/alyx/emptool_glow (was the combine ball's models/effects/comball_sphere), a COLOUR the player picks in the PPC tool (new knobs PPCBallColorR / G / B, 0 255 255 = cyan, are the colour of a PPC that was never given one; the ball is always fully opaque) and a SIZE that grows with the caliber (new knobs PPCBallSizeSmall 0.5 and PPCBallSizeBig 3: half the old size at 50 mm, three times at 300 mm, a straight line between, exactly 1 at 100 mm: the balls are 2.5 / 10.4 / 24.3 / 44.8 / 72.5 / 108 units across at 50 / 100 / 150 / 200 / 250 / 300 mm). 18 changed: PPCBlastScalar 0.1224 (was 1: the PPC blast has HALF the radius, 100 mm 350 -> 175 units), PPCPropDamageScalar 640 (was 20 = 8 times the ACF damage, x4 on top to make up for the weaker blast) and PPCHeatPerDamage 3750 (was 30000: the heat a part gets close to the blast is what 17 gave it). 17 changed: the FUSION ENGINE gets a THROTTLE (the Active input, 0 to 1, is the operating percent it is asked to hold), a SIZE CURVE for scale and mass (FusionSizeCurve 1 and FusionSizeCurveRate 8: an inverse exponential, 0 on FusionSizeCurve is the straight line), a HUM (FusionHum... knobs, a looping sound that follows the operating percent and the size) and MORE HEAT PER kJ WHEN DAMAGED (FusionDamagedHeatMult 2: twice at 0% health). 16.9 changed: the FUSION ENGINE WAS REBUILT (one rated-power SLIDER, FusionHPMin 250 to FusionHPMax 6500 hp, instead of two fixed sizes: FusionTypes, FusionTypeDefault, FusionDrawDefault and FusionDrawMax are gone and the Fusion... knobs and helpers are new; FusionHeatScalar is 0.25), PPCEnergySmall 1000 / 3 and PPCEnergyBig 400000 / 3 (a third less energy per shot: the blast is made from that energy, so its filler is 2/3 of what it was; PPCBlastScalar 1.5 gives the old blast back) and the new PPCBallBigMult 1.2 (the 300 mm ball is 1.2 times bigger than the straight scaling of the 50 mm ball). 16.8 changed: PPCMassMin 255 (was 120: a 50 mm PPC weighs 355 kg, was 222), the EntityLimitsFromConfig knob of 16.7 is gone (nothing sets the limits from the config any more: your server settings do), and the first fusion engines (rebuilt in 16.9). 16.7 changed: PPCPropDamageScalar 20 (was 1: 20 times the ACF damage at the SAME blast radius, which PPCBlastScalar sets) and PPCHeatPerDamage 30000 (was 1000000: 20 x 30000 = 0.6 x the 16.6 blast heat). 16.6 changed: the smallest PPC is 50 mm (PPCCaliberMin 50; the new PPCCurveStart 20 keeps every number at 50 mm and above where it was); the PPC blast now heats only the parts it DAMAGES, in proportion to the damage (the new PPCHeatPerDamage and PPCHeatMaxPct 300 replace PPCHeatScalar and PPCHeatRadiusMult); the new HeatCheck... knobs belong to the Heat Checker tool (HeatCheckInterval, the lazers' own overheat check, is not one of them and is still 0.1). 16.5: PPCHeatPctSmall 67.8 and PPCHeatPctBig 100 (100 mm = 77%, 300 mm = 100% of the PPC's own limit per shot); 16.2: the PPCHeat... knobs (the PPC heats itself), the PPCFire... knobs (its fire sound) and HeatIgniteClasses holds acf_ppc).
+-- Everything else is the shipped 22.1 value (22.1 changed: THE FLAME DRAG IS 10 TIMES (FlameDragMult 40, was 4) AND THE FIRE SPRITES WIDEN WITH THE SPHERE (FlameTrailSizeStart / FlameTrailSizeEnd 1, were 0.6 / 1.2: a sprite starts as wide as the sphere was and ends as wide as the sphere is when it dies); the tool's readout names the SIDEWAYS speed. 22 changed: THE FLAMETHROWER (new entity acf_flamer, ~58 new Flame... knobs, the napalm fuel, the projectile with its swept sphere; every number is a knob and the readout in the tool shows what they do) and THE FUSION ENGINE HEATS STATICALLY (FusionStaticHeat 0.15 x its standard heat x its charge percent x a health multiplier that goes from 1 to FusionDamagedHeatMult 5 at no health; the old heat per kJ of energy is the switch FusionEnergyHeatMult, 0 = off; FusionHeatScalar now means the engine's STANDARD heat, kJ per kJ of its full output, and YOUR value 2.5 means ten times the shipped 0.25 standard heat). RadFlushKJPerLiter 125000 is the shipped one; the other five player limits are 40: capacitor, generator, radiator, lazer and PPC; the fusion engine limit is YOUR 8). 21 changed: FOUR SOUNDS. The generator HUMS: GenHumSound ambient/grinder/grinderloop_01.wav, quieter, higher and softer for a small hub and louder and deeper for a big one (GenHumVolumeSmall 0.35 / GenHumVolumeBig 1, GenHumPitchSmall 140 / GenHumPitchBig 70, GenHumLevelSmall 55 / GenHumLevelBig 85 dB, the size is the same model curve as the generator's scale), and it follows the load: at a trickle of load it plays at GenHumLoadFloor 0.4 of the volume and GenHumPitchIdle 0.85 of the pitch, and below GenHumMinLoad 0.01 it is silent. The PPC's fire burst is PPCFireSound beams/beamstart5.wav (the zap crackle stays) and a small PPC is quieter: PPCFireVolumeSmallMult 0.6 at PPCCurveStart 20 mm (a 50 mm PPC is at 0.64, a 100 mm one at 0.71), a straight line up to 1 at 300 mm (its pitch 125 to 75 was already there). The FUSION ENGINE's hum is FusionHumSound ambient/machines/refrigerator.wav (its pitch already follows its size: FusionHumPitchSmall 125 to FusionHumPitchBig 70). The LAZERS' sound scales again: MuzzlePitchSmall 255 (was 315, which the engine held to 255, so every lazer up to about 144 mm had the same pitch) and the engine volume is now the loudness divided by the larger of MuzzleVolumeSmall 1.4 and MuzzleVolumeBig 2.4 (it was min(loudness, 1) = 1 at every size), so the smallest lazer plays at 0.58 and the biggest at 1. 20 changed: the PPC BLAST HAS ITS OWN DAMAGE MODEL (the flag PPCOwnDamage, on; PPCBlastHealthSmall 2.2 and PPCBlastHealthBig 4.4 set the damage a part takes in multiples of ITS OWN base health, PPCArmourInfluence 0.25 is how much its armour counts: 0 = not at all, 1 = ACF's own law; the falloff is an INVERSE EXPONENTIAL, PPCFalloffRate 3, PPCFalloffBlend 1 = fully curved, 0 = the straight line), the PPC's SELF-DAMAGE IS 4 TIMES SLOWER (PPCHeatDamageMult 0.25) and is fast (PPCHeatOverfireMult 1) only for PPCHeatOverfireSeconds 5 after a shot that was fired while it was already over 100%, FusionSizeCurve 0.75 (was 1: the fusion model's size follows the inverse exponential 3/4 as much) and the fusion engine's MASS follows its rated power in a straight line (the size curve no longer touches it). 19 changed: the PPC BALL: PPCBallMaterial models/alyx/emptool_glow (was the combine ball's models/effects/comball_sphere), a COLOUR the player picks in the PPC tool (new knobs PPCBallColorR / G / B, 0 255 255 = cyan, are the colour of a PPC that was never given one; the ball is always fully opaque) and a SIZE that grows with the caliber (new knobs PPCBallSizeSmall 0.5 and PPCBallSizeBig 3: half the old size at 50 mm, three times at 300 mm, a straight line between, exactly 1 at 100 mm: the balls are 2.5 / 10.4 / 24.3 / 44.8 / 72.5 / 108 units across at 50 / 100 / 150 / 200 / 250 / 300 mm). 18 changed: PPCBlastScalar 0.1224 (was 1: the PPC blast has HALF the radius, 100 mm 350 -> 175 units), PPCPropDamageScalar 640 (was 20 = 8 times the ACF damage, x4 on top to make up for the weaker blast) and PPCHeatPerDamage 3750 (was 30000: the heat a part gets close to the blast is what 17 gave it). 17 changed: the FUSION ENGINE gets a THROTTLE (the Active input, 0 to 1, is the operating percent it is asked to hold), a SIZE CURVE for scale and mass (FusionSizeCurve 1 and FusionSizeCurveRate 8: an inverse exponential, 0 on FusionSizeCurve is the straight line), a HUM (FusionHum... knobs, a looping sound that follows the operating percent and the size) and MORE HEAT PER kJ WHEN DAMAGED (FusionDamagedHeatMult 2: twice at 0% health). 16.9 changed: the FUSION ENGINE WAS REBUILT (one rated-power SLIDER, FusionHPMin 250 to FusionHPMax 6500 hp, instead of two fixed sizes: FusionTypes, FusionTypeDefault, FusionDrawDefault and FusionDrawMax are gone and the Fusion... knobs and helpers are new; FusionHeatScalar is 0.25), PPCEnergySmall 1000 / 3 and PPCEnergyBig 400000 / 3 (a third less energy per shot: the blast is made from that energy, so its filler is 2/3 of what it was; PPCBlastScalar 1.5 gives the old blast back) and the new PPCBallBigMult 1.2 (the 300 mm ball is 1.2 times bigger than the straight scaling of the 50 mm ball). 16.8 changed: PPCMassMin 255 (was 120: a 50 mm PPC weighs 355 kg, was 222), the EntityLimitsFromConfig knob of 16.7 is gone (nothing sets the limits from the config any more: your server settings do), and the first fusion engines (rebuilt in 16.9). 16.7 changed: PPCPropDamageScalar 20 (was 1: 20 times the ACF damage at the SAME blast radius, which PPCBlastScalar sets) and PPCHeatPerDamage 30000 (was 1000000: 20 x 30000 = 0.6 x the 16.6 blast heat). 16.6 changed: the smallest PPC is 50 mm (PPCCaliberMin 50; the new PPCCurveStart 20 keeps every number at 50 mm and above where it was); the PPC blast now heats only the parts it DAMAGES, in proportion to the damage (the new PPCHeatPerDamage and PPCHeatMaxPct 300 replace PPCHeatScalar and PPCHeatRadiusMult); the new HeatCheck... knobs belong to the Heat Checker tool (HeatCheckInterval, the lazers' own overheat check, is not one of them and is still 0.1). 16.5: PPCHeatPctSmall 67.8 and PPCHeatPctBig 100 (100 mm = 77%, 300 mm = 100% of the PPC's own limit per shot); 16.2: the PPCHeat... knobs (the PPC heats itself), the PPCFire... knobs (its fire sound) and HeatIgniteClasses holds acf_ppc).
 -- =========================================================================
 
 if SERVER then AddCSLuaFile() end
@@ -500,13 +513,15 @@ table.Merge(ACFLazers.Config, {
     -- OPERATING PERCENT. The Active wire input (nothing wired = FusionActiveDefault) is a THROTTLE from 0 to 1 [17]: the operating percent the engine is asked to hold (0 = off, 1 = 100%, 0.4 = 40%; over 1 counts as 1).
     -- While it is over 0 the operating percent climbs from where it is toward its TARGET at 1 / spin-up per second (8 s for the smallest, 15 s for the biggest, 0 -> 100%). The target is the LOWER of the throttle
     -- and the engine's CEILING = its EFFICIENCY: the health efficiency (1 at full health, FusionDamagedEfficiency at 0%) times the heat efficiency (1 up to FusionHeatEffStart of the critical heat, falling in a
-    -- straight line to FusionHeatEffAtCritical at the critical heat). A lower throttle means less energy and less heat (heat is made per kJ stored), so a player can hold a hot engine down. Over its target (a lowered
+    -- straight line to FusionHeatEffAtCritical at the critical heat). A lower throttle means less energy and, as its charge follows the operating percent (22: the heat follows the charge), less heat, so a player can hold a hot engine down. Over its target (a lowered
     -- throttle, damage or heat) it falls toward the target at FusionSpinDownMult times the spin-up rate; at a throttle of 0 it falls to 0 the same way.
-    -- HEAT PER KJ [17]. FusionHeatScalar x (1 at full health ... FusionDamagedHeatMult at 0% health, a straight line): a damaged engine is less efficient and wastes more of its energy as heat.
+    -- DAMAGED ENGINES MAKE MORE HEAT [17, 22]. The heat multiplier is 1 at full health ... FusionDamagedHeatMult (5) at 0% health, a straight line: a damaged engine wastes more of its energy as heat.
     -- PPC HITS. When a PPC detonates within FusionPPCRange units of the engine, the operating percent is CUT at once by (the PPC's heat percent per shot, GetPPCHeatPct, as a fraction: 67.8% for a 50 mm, 100%
     -- for a 300 mm) x the engine's PPC scalar x FusionPPCCutMult; it cannot grow again for a random time between FusionPPCDelayMin and the engine's longest wait (a new hit in the meantime rolls a new wait), and then
     -- climbs back at its normal spin-up rate toward its ceiling. A protected (safezone) engine is not touched.
-    -- HEAT. Every kJ the engine really puts into the capacitors heats ITSELF by FusionHeatScalar kJ (0.25 = a quarter). It holds heat like any part (mass x HeatSpecificHeat) and cools by itself. At FusionCriticalF
+    -- HEAT [22: STATIC]. The engine heats ITSELF all the time by its STATIC HEAT = FusionStaticHeat (0.15) x its standard heat (FusionHeatScalar x the rated kJ/s) x its CHARGE PERCENT x the damage multiplier above. It does not matter whether the
+    -- capacitors have room: a full engine on full capacitors is just as hot. The charge follows the operating percent up and drains slowly (CHARGE below), so the heat does too. (17 to 21 made FusionHeatScalar kJ per kJ put into
+    -- the capacitors instead; FusionEnergyHeatMult 1 brings that back on top.) It holds heat like any part (mass x HeatSpecificHeat) and cools by itself. At FusionCriticalF
     -- (Fahrenheit) it is at its critical heat: it DETONATES (unless it is in a safezone: a safezone engine cannot explode).
     -- CHARGE. The energy it holds inside. It follows the operating percent up (charge = operating percent x rated kJ/s x FusionChargeSeconds) but only drains slowly when the operating percent falls (the whole store in
     -- FusionChargeDrainSeconds), so switching it off, a PPC hit or a spin-down does not empty it at once. When the engine explodes (critical heat, or destroyed) the charge becomes an ACF explosion: filler kg =
@@ -533,8 +548,10 @@ table.Merge(ACFLazers.Config, {
     FusionPPCDelayMin   = 1,      -- seconds: the shortest time after a PPC hit before the operating percent may grow again (both ends of the slider)
     FusionPPCDelayMaxSmall = 3,   -- seconds: the longest of that wait at FusionHPMin (a random time between FusionPPCDelayMin and this)
     FusionPPCDelayMaxBig = 5,     -- seconds: ... and at FusionHPMax
-    FusionHeatScalar    = 2.5,    -- [YOUR VALUE, shipped 0.25] kJ of heat the engine gets per kJ it puts into the capacitors (0.25 = a quarter, 1 = as much heat as energy, 2.5 = two and a half times). 0 = no heat
-    FusionDamagedHeatMult = 2,    -- [17] the heat per kJ at 0% health, as a multiple of FusionHeatScalar (a straight line from 1 at full health). 2 = a wrecked engine makes twice the heat for every kJ it makes. 1 = damage does not change it
+    FusionHeatScalar    = 2.5,    -- [YOUR VALUE, shipped 0.25] [22: what it means] kJ of heat per kJ of the engine's FULL OUTPUT, the base of its "standard heat" = FusionHeatScalar x the rated kJ/s (hp x GenKJPerHP) (0.25 = a quarter, 1 = as much heat as energy, 2.5 = two and a half times). 0 = no heat at all
+    FusionStaticHeat    = 0.15,   -- [22] the heat the engine REALLY makes just by holding its charge, as a multiple of its standard heat per second: at 100% charge and full health it makes 0.15 x standard. At a lower charge percent it is that share of it (a straight line). Made whether or not the capacitors have room. 0 = none
+    FusionDamagedHeatMult = 5,    -- [17, 22: 2 -> 5] the static heat at 0% health, as a multiple of what the same charge makes at full health (a straight line from 1 at full health). 5 = a wrecked engine makes five times the heat. 1 = damage does not change it
+    FusionEnergyHeatMult = 0,     -- [22] the OLD heat of 17 to 21, kept as a switch: kJ of heat per kJ it puts into the capacitors = FusionHeatScalar x this x the health multiplier above. 0 = off (the static heat is the engine's only heat), 1 = the old heat as well
     FusionCriticalF     = 1500,   -- degrees Fahrenheit. The critical heat: the engine detonates there. (A plate is HOT at HeatHotF, 1100 F.)
     FusionHeatEffStart  = 0.5,    -- [GUESS] share of the critical heat (kelvin above room temperature) up to which the heat efficiency is still 1 ("low heat")
     FusionHeatEffAtCritical = 0.5, -- [GUESS] the heat efficiency AT the critical heat (a straight line from 1 at FusionHeatEffStart). 0 would stop it dead there, so it could never reach the critical heat by itself
@@ -919,10 +936,83 @@ table.Merge(ACFLazers.Config, {
     PPCFirePitchSmall = 125,    -- pitch of the smallest PPC (100 = the file as it is, higher = higher and shorter) ...
     PPCFirePitchBig   = 75,     -- ... and of the biggest, a straight line between: a big PPC sounds deeper. Clamped to 20 .. 255
     PPCFireVolumeSmallMult = 0.6, -- [21] 0..1: both layers play at this share of their volume at the smallest PPC (PPCCurveStart), a straight line up to their full volume at PPCCaliberMax: a big PPC is louder. 1 = the same volume at every size
+    -- ===================== THE FLAMETHROWER (acf_flamer) ===================== [22]
+    -- (22) A gun that burns NAPALM. Wire Fire held = one flame projectile FlameShotsPerSecond times a second; the gun burns FlameFuelSmall .. FlameFuelBig litres of napalm per second (a straight line
+    -- over its size), taken from the napalm fuel tanks linked to it. The napalm tank is ACF's own scalable fuel tank (same models, same size sliders) filled with the new fuel type "Napalm"
+    -- (lua/acf/entities/fuel_types/napalm.lua), which only flamethrowers can burn.
+    -- THE PROJECTILE is one of ACF's own (like the PPC's). It has gravity and FlameDragMult times the drag of an ordinary ACF shell, and it ends by itself FlameLifetime seconds after the shot
+    -- (that rule is always first). It carries an invisible SPHERE that starts FlameSphereStart units across and grows to FlameSphereGrow times that over its lifetime. What the sphere touches:
+    --   * a PROP or any other ACF part (not the shooter's own contraption): it gets FlameHeatSmall .. FlameHeatBig PERCENT OF "HOT" as heat (HeatHotF; once per projectile) and is set on fire for
+    --     FlameIgniteSmall .. FlameIgniteBig seconds. A part that is over FlameDamageHeatPct percent of HOT also loses FlameHPSmall .. FlameHPBig points of ACF health per hit. The projectile ends
+    --     FlameLinger seconds after its sphere first touched such a part, so the flame does not go through a vehicle. A plain prop (not an "acf_" entity) that is on fire cools FlameCoolMult as fast.
+    --   * a PERSON (player, NPC): FlamePlayerDamageSmall .. FlamePlayerDamageBig damage and the same burning time. The projectile goes on through them.
+    -- "Small .. Big" = a straight line over the flamer's size, FlameCaliberMin .. FlameCaliberMax mm. Every Flame... knob is optional: the helper file below has a default for each (a test keeps the two equal).
+    FlameModel          = "models/lasers/flamer.mdl", -- the flamethrower. If the file is missing it refuses to spawn and says so
+    FlameCaliberMin     = 75,     -- mm, the smallest flamethrower (model scale 0.5)
+    FlameCaliberMax     = 225,    -- mm, the biggest (model scale 1.5)
+    FlameCaliberBase    = 150,    -- mm. The model is its normal size (scale 1) at this caliber: scale = caliber / FlameCaliberBase
+    FlameMuzzleX        = 51.3,   -- where the flames start, in model units from the model's origin at scale 1 (x forward, y, z): multiplied by the scale. [GUESS] "the center of the prop" means the entity's origin
+    FlameMuzzleY        = -2.33,
+    FlameMuzzleZ        = 3.75,
+    FlameMassSmall      = 50,     -- [GUESS] kg at FlameCaliberMin, a straight line up to ...
+    FlameMassBig        = 450,    -- ... kg at FlameCaliberMax
+    FlameArmourMult     = 0.5,    -- multiplier on the armour ACF would give (caliber x ACF.ArmorMod): half, like the lazer and the PPC
+    FlameHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
+    FlameMaxPerPlayer   = 40,     -- default for the server variable sbox_maxacf_flamers (how many flamethrowers one player may have). Only a DEFAULT: set the variable on the server
+    FlameShotsPerSecond = 7,      -- projectiles per second while Fire is held
+    FlameFuelSmall      = 0.5,    -- litres of napalm per second at FlameCaliberMin (75 mm) ...
+    FlameFuelBig        = 3.5,    -- ... and at FlameCaliberMax (225 mm). 2 L/s at 150 mm is on the straight line between the two, as asked. Set this to 2 if 2 L/s was meant for the biggest
+    FlameNapalmDensity  = 0.9,    -- [GUESS] kg per litre of napalm (petrol is 0.832): what a full napalm tank weighs
+    FlameLifetime       = 3,      -- seconds. The projectile is deleted this long after the shot, whatever else is going on
+    FlameSpeedSmall     = 80,     -- m/s at FlameCaliberMin ...
+    FlameSpeedBig       = 150,    -- ... and at FlameCaliberMax
+    FlameDragMult       = 40,     -- (22.1: 40, was 4 in 22) times the drag of an ordinary ACF shell of the same caliber (a steel shell FlameDragRefLength calibers long). 1 = an ordinary shell
+    FlameDragRefLength  = 4,      -- [GUESS] calibers. The length of the "ordinary shell" the drag is measured against (ACF's drag coefficient is 0.0001 / (steel density x length)): longer = less drag
+    FlameGravityMult    = 1,      -- 1 = ACF's gravity (the flame falls like a shell), 0 = it flies straight
+    FlameSphereStart    = 16,     -- units. The sphere's diameter when the projectile leaves the gun (the same at every size) ...
+    FlameSphereGrow     = 3,      -- ... times this at the end of FlameLifetime (3 = three times as wide), growing in a straight line with its age
+    FlameLinger         = 0.05,   -- seconds the projectile lives on after its sphere first touched a prop or ACF part (at least until the next server tick)
+    FlameIgniteSmall    = 10,     -- seconds a thing the sphere touches is set on fire, at FlameCaliberMin ...
+    FlameIgniteBig      = 30,     -- ... and at FlameCaliberMax. A person burns this long too
+    FlameHeatSmall      = 6,      -- [GUESS] PERCENT OF HOT (HeatHotF; 100 = what takes the part from room temperature to HOT) that ONE touch adds to a part's heat, at FlameCaliberMin ...
+    FlameHeatBig        = 20,     -- ... and at FlameCaliberMax. Percent of HOT, so a light part and a heavy one reach the same percent from the same touches
+    FlameDamageHeatPct  = 170,    -- percent of HOT. A part at or over this loses ACF health on each touch (FlameHPSmall .. FlameHPBig)
+    FlameHPSmall        = 2,      -- ACF health points lost per touch of a part over FlameDamageHeatPct, at FlameCaliberMin ...
+    FlameHPBig          = 4,      -- ... and at FlameCaliberMax
+    FlamePlayerDamageSmall = 10,  -- damage to a person per touch, at FlameCaliberMin ...
+    FlamePlayerDamageBig   = 20,  -- ... and at FlameCaliberMax
+    FlameCoolMult       = 0.5,    -- a plain prop (not an "acf_" entity) cools this fraction as fast as normal while it is on fire from a flamethrower
+    FlameIgniteProps    = true,   -- true = a part the flames touch also gets the game's fire picture (Entity:Ignite). false = heat and damage only, no visible fire on props
+    FlameKillDebrisPower = 20000, -- [GUESS] how hard the pieces fly when flames destroy a part (capped by MaxDebrisPower)
+    -- SOUNDS. The gun makes a loop while it fires (a server sound that follows the gun), plus a short sound when it starts; every few projectiles carry a loop of their own (client side).
+    -- [GUESS] what these sound like, nobody here has HEARD them: type  play ambient/fire/fire_med_loop1.wav  in the console to try one. Other candidates: ambient/fire/fire_big_loop1.wav,
+    -- ambient/fire/fire_small_loop2.wav, ambient/gas/steam_loop1.wav, ambient/gas/cannister_loop.wav, ambient/fire/mtov_flame2.wav, ambient/fire/gascan_ignite1.wav. "" = none.
+    FlameGunLoop        = "ambient/fire/fire_med_loop1.wav", -- the gun, while it fires
+    FlameGunVolume      = 0.8,    -- 0..1
+    FlameGunLevel       = 85,     -- sound level in decibels (how far it carries; 75 = a normal voice, 100 = a gunshot)
+    FlameGunPitchSmall  = 130,    -- pitch of the smallest flamethrower (100 = the file as it is) ...
+    FlameGunPitchBig    = 80,     -- ... and of the biggest, a straight line between: a big one sounds deeper
+    FlameStartSound     = "ambient/fire/ignite.wav", -- played once when the gun starts firing
+    FlameStartVolume    = 1,      -- 0..1
+    FlameProjSound      = "ambient/fire/fire_small_loop1.wav", -- the loop a projectile carries (the player who sees it flying hears it)
+    FlameProjVolume     = 0.5,    -- 0..1
+    FlameProjLevel      = 70,     -- sound level of that loop
+    FlameProjSoundEvery = 3,      -- only every Nth projectile carries a loop (1 = every one; sounds are limited, and 7 shots a second would be a lot of loops)
+    FlameProjSoundDist  = 3000,   -- units. A projectile further than this from the player's eyes carries no sound
+    -- THE PICTURE (client). A trail of fire sprites follows every projectile. [GUESS] the materials are HL2's own fire sprites.
+    FlameTrailMaterials = { "effects/fire_cloud1", "effects/fire_cloud2" },
+    FlameTrailPerSecond = 60,     -- sprites per second per projectile
+    FlameTrailLife      = 0.45,   -- seconds a sprite lives
+    FlameTrailSizeStart = 1,      -- (22.1: 1, was 0.6) a sprite starts this many times the sphere's diameter (at the age the sprite was made) across ...
+    FlameTrailSizeEnd   = 1,      -- ... (22.1: 1, was 1.2) and ends this many times the sphere's diameter at the age it dies: so the fire widens exactly as the sphere does (1 = as wide as the sphere)
+    FlameTrailAlpha     = 200,    -- 0..255 at the start (it fades to 0)
+    FlameTrailColorR    = 255,    -- the sprites' colour (orange)
+    FlameTrailColorG    = 150,
+    FlameTrailColorB    = 60,
     -- ===================== LINKING TOOLS =====================
     -- The things the link tools (right-click / shift / reload on the lazer, capacitor and generator tools) can select and link. ACF's own link system decides which PAIRS work:
-    --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor, PPC <-> capacitor, radiator <-> radiator (a pool).
-    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine", acf_radiator = "radiator", acf_ppc = "PPC", acf_fusion = "fusion" }, -- class -> the word used in chat messages [CHANGED 6] [CHANGED 22] [CHANGED 30]
+    --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor, PPC <-> capacitor, radiator <-> radiator (a pool), flamethrower <-> napalm fuel tank (22).
+    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine", acf_radiator = "radiator", acf_ppc = "PPC", acf_fusion = "fusion", acf_flamer = "flamethrower", acf_fueltank = "fuel tank" }, -- class -> the word used in chat messages [CHANGED 6] [CHANGED 22] [CHANGED 30]
 
     -- ===================== WOBBLE: A DAMAGED LAZER LOSES ITS AIM =====================
     -- The lower a lazer's health, the more its beam drifts away from where it points. The drift is SMOOTH (it slowly wanders around, it never
@@ -2555,7 +2645,7 @@ local FusionNumberDefaults = {
     FusionSpinUpSmall = 8, FusionSpinUpBig = 15, FusionSpinDownMult = 1, FusionActiveDefault = 1, FusionNeedsParent = 1,
     FusionPPCRange = 300, FusionPPCCutMult = 1, FusionPPCScalarSmall = 1, FusionPPCScalarBig = 0.5,
     FusionPPCDelayMin = 1, FusionPPCDelayMaxSmall = 3, FusionPPCDelayMaxBig = 5,
-    FusionHeatScalar = 0.25, FusionDamagedHeatMult = 2, FusionCriticalF = 1500, FusionHeatEffStart = 0.5, FusionHeatEffAtCritical = 0.5, FusionDamagedEfficiency = 0.5,
+    FusionHeatScalar = 0.25, FusionStaticHeat = 0.15, FusionDamagedHeatMult = 5, FusionEnergyHeatMult = 0, FusionCriticalF = 1500, FusionHeatEffStart = 0.5, FusionHeatEffAtCritical = 0.5, FusionDamagedEfficiency = 0.5,
     FusionChargeSeconds = 10, FusionChargeDrainSeconds = 60, FusionBlastMult = 1, FusionBlastMinKJ = 0.1,
     FusionHumVolumeSmall = 0.3, FusionHumVolumeBig = 1, FusionHumPitchSmall = 125, FusionHumPitchBig = 70, FusionHumPitchIdle = 0.5,
     FusionHumLevelSmall = 60, FusionHumLevelBig = 80, FusionHumMinOperating = 0.01,
@@ -2715,14 +2805,32 @@ function ACFLazers.GetFusionTarget(throttle, ceiling)
     return math.min(ACFLazers.GetFusionThrottle(throttle), ACFLazers.ClampNumber(ceiling, 0, 0, 1))
 end
 
---- [17] The multiplier on the engine's heat per kJ from its health (a fraction 0..1): 1 at full health, FusionDamagedHeatMult at 0% (a straight line between). The heat the engine makes from every kJ it puts
---- into the capacitors is FusionHeatScalar x this. (An engine at 0% health also only reaches FusionDamagedEfficiency of the energy, so its heat PER SECOND at full throttle is this x that.)
+--- [17, 22] The multiplier on the engine's heat from its health (a fraction 0..1): 1 at full health, FusionDamagedHeatMult (5) at 0% (a straight line between). It multiplies the static heat (GetFusionStaticHeat)
+--- and, when FusionEnergyHeatMult is on, the old heat per kJ too. (An engine at 0% health also only reaches FusionDamagedEfficiency of the operating percent, so of the charge.)
 function ACFLazers.GetFusionHeatMult(health)
     health = tonumber(health) or 1
 
     if health ~= health then health = 1 end -- NaN counts as undamaged
 
     return Lerp(math.Clamp(health, 0, 1), math.max(ACFLazers.FusionNumber("FusionDamagedHeatMult"), 0), 1)
+end
+
+--- [22] The engine's STANDARD heat in kJ per second: the heat it would make from its maximum theoretical output (the rated kJ/s, hp x GenKJPerHP, at 100% operating) at FusionHeatScalar kJ of heat per kJ.
+function ACFLazers.GetFusionStandardHeat(hp)
+    return ACFLazers.GetFusionRatedRate(hp) * math.max(ACFLazers.FusionNumber("FusionHeatScalar"), 0)
+end
+
+--- [22] The heat (kJ per second) the engine makes just by holding `charge` kJ (0..its full store) at `health` (a fraction 0..1):
+---   standard heat x FusionStaticHeat x (charge / the full store) x GetFusionHeatMult(health).
+--- 0.15 x standard at a full charge and full health; the same share of it at a lower charge; up to 5 times as much at no health. No store (FusionChargeSeconds 0) = no heat. Junk (NaN, negative) counts as 0 charge.
+function ACFLazers.GetFusionStaticHeat(hp, charge, health)
+    local most = ACFLazers.GetFusionChargeMax(hp)
+
+    if not (most > 0) then return 0 end
+
+    local share = ACFLazers.ClampNumber(charge, 0, 0, most) / most
+
+    return ACFLazers.GetFusionStandardHeat(hp) * math.max(ACFLazers.FusionNumber("FusionStaticHeat"), 0) * share * ACFLazers.GetFusionHeatMult(health)
 end
 
 --- [17] The hum for an engine of this rated power at this operating percent (a fraction 0..1): a table { on, volume, pitch, level, size }.
@@ -2817,7 +2925,10 @@ function ACFLazers.GetFusionReadout(hp)
         recoveryMin       = ACFLazers.FusionNumber("FusionPPCDelayMin"),
         recoveryMax       = ACFLazers.GetFusionRecoveryMax(hp),
         efficiencyDamaged = ACFLazers.GetFusionHealthEfficiency(0),
-        heatMultDamaged   = ACFLazers.GetFusionHeatMult(0),            -- [17] heat per kJ at 0% health, as a multiple of heatScalar
+        heatMultDamaged   = ACFLazers.GetFusionHeatMult(0),            -- [17] the heat multiplier at 0% health (22: 5)
+        standardHeat      = ACFLazers.GetFusionStandardHeat(hp),       -- [22] kJ/s of heat at the maximum theoretical output (FusionHeatScalar x the rated kJ/s)
+        staticHeat        = ACFLazers.GetFusionStaticHeat(hp, charge, 1),  -- [22] kJ/s of heat it makes at a full charge and full health
+        staticHeatDamaged = ACFLazers.GetFusionStaticHeat(hp, charge, 0),  -- [22] ... and at a full charge and 0% health
         sizeFraction      = ACFLazers.GetFusionSizeFraction(hp),       -- [17] where it sits on the size curve (0..1)
         capSize           = size,
         capacity          = capacity,                                  -- kJ the reference capacitor holds
@@ -3084,4 +3195,359 @@ function ACFLazers.IsFlammable(matType, ent)
     if FlammableMaterials[matType] == true then return true end
 
     return ent ~= nil and ACFLazers.IsExplosiveProp(ent)
+end
+
+-- ===================== FLAMETHROWER HELPERS (pure maths: nothing here touches the game) ===================== [22]
+-- Every Flame knob is optional: FlameNumber / FlameString / FlameFlag give the value in the config, or, when the config has none (or junk), the default written below. A test keeps this table equal to
+-- the knob block above, so there is ONE set of numbers to read.
+
+local FlameNumberDefaults = {
+    FlameCaliberMin = 75, FlameCaliberMax = 225, FlameCaliberBase = 150,
+    FlameMuzzleX = 51.3, FlameMuzzleY = -2.33, FlameMuzzleZ = 3.75,
+    FlameMassSmall = 50, FlameMassBig = 450, FlameArmourMult = 0.5, FlameHealthMult = 1, FlameMaxPerPlayer = 40,
+    FlameShotsPerSecond = 7, FlameFuelSmall = 0.5, FlameFuelBig = 3.5, FlameNapalmDensity = 0.9,
+    FlameLifetime = 3, FlameSpeedSmall = 80, FlameSpeedBig = 150, FlameDragMult = 40, FlameDragRefLength = 4, FlameGravityMult = 1,
+    FlameSphereStart = 16, FlameSphereGrow = 3, FlameLinger = 0.05,
+    FlameIgniteSmall = 10, FlameIgniteBig = 30, FlameHeatSmall = 6, FlameHeatBig = 20, FlameDamageHeatPct = 170, FlameHPSmall = 2, FlameHPBig = 4,
+    FlamePlayerDamageSmall = 10, FlamePlayerDamageBig = 20, FlameCoolMult = 0.5, FlameKillDebrisPower = 20000,
+    FlameGunVolume = 0.8, FlameGunLevel = 85, FlameGunPitchSmall = 130, FlameGunPitchBig = 80, FlameStartVolume = 1,
+    FlameProjVolume = 0.5, FlameProjLevel = 70, FlameProjSoundEvery = 3, FlameProjSoundDist = 3000,
+    FlameTrailPerSecond = 60, FlameTrailLife = 0.45, FlameTrailSizeStart = 1, FlameTrailSizeEnd = 1, FlameTrailAlpha = 200,
+    FlameTrailColorR = 255, FlameTrailColorG = 150, FlameTrailColorB = 60,
+}
+
+local FlameStringDefaults = { FlameModel = "models/lasers/flamer.mdl" }
+
+local FlameFlagDefaults = { FlameIgniteProps = true }
+
+-- A sound knob is a text, or a list of texts (one picked at random); "" or false = none.
+local FlameSoundDefaults = {
+    FlameGunLoop        = "ambient/fire/fire_med_loop1.wav",
+    FlameStartSound     = "ambient/fire/ignite.wav",
+    FlameProjSound      = "ambient/fire/fire_small_loop1.wav",
+    FlameTrailMaterials = { "effects/fire_cloud1", "effects/fire_cloud2" },
+}
+
+ACFLazers.FlameNumberDefaults = FlameNumberDefaults
+ACFLazers.FlameStringDefaults = FlameStringDefaults
+ACFLazers.FlameFlagDefaults   = FlameFlagDefaults
+ACFLazers.FlameSoundDefaults  = FlameSoundDefaults
+
+-- The name of the flame projectile's type inside ACF (lua/acf/entities/ammo_types/lazers_flame.lua registers it, the flamethrower names it on every projectile and on itself for the client's picture).
+ACFLazers.FlameAmmoID = "LazerFlame"
+
+-- The fuel type the flamethrower burns (lua/acf/entities/fuel_types/napalm.lua registers it).
+ACFLazers.FlameFuelID = "Napalm"
+
+--- A flamethrower number: the config's, or the default when the config has no real number there.
+function ACFLazers.FlameNumber(name)
+    local v = tonumber(ACFLazers.Config[name])
+
+    if not v or v ~= v or v == math.huge or v == -math.huge then return FlameNumberDefaults[name] end
+
+    return v
+end
+
+--- A flamethrower text (the model's path): the config's, or the default when the config has no text there.
+function ACFLazers.FlameString(name)
+    local v = ACFLazers.Config[name]
+
+    if type(v) == "string" then return v end
+
+    return FlameStringDefaults[name]
+end
+
+--- A flamethrower on/off switch: true or a number of 1 or more is on, false or a smaller number is off, anything else is the default.
+function ACFLazers.FlameFlag(name)
+    local v = ACFLazers.Config[name]
+
+    if v == true then return true end
+    if v == false then return false end
+    if tonumber(v) then return tonumber(v) >= 1 end
+
+    return FlameFlagDefaults[name]
+end
+
+--- The sounds one knob may play, as a list of texts: the config's text or list (empty texts dropped); the default when the config has no text or list there; an empty list when the config says "" or false.
+function ACFLazers.FlameSoundList(name)
+    local v = ACFLazers.Config[name]
+
+    if v == false then return {} end
+    if type(v) ~= "string" and type(v) ~= "table" then v = FlameSoundDefaults[name] end
+
+    local out = {}
+
+    if type(v) == "string" then
+        if v ~= "" then out[1] = v end
+    elseif type(v) == "table" then
+        for _, s in ipairs(v) do
+            if type(s) == "string" and s ~= "" then out[#out + 1] = s end
+        end
+    end
+
+    return out
+end
+
+--- One sound of a knob, picked at random (nil = silent). `pick` is only for tests: pick(n) returns a whole number from 1 to n.
+function ACFLazers.PickFlameSound(name, pick)
+    local list = ACFLazers.FlameSoundList(name)
+
+    if #list == 0 then return nil end
+
+    local i = pick and pick(#list) or math.random(#list)
+
+    return list[math.Clamp(math.floor(tonumber(i) or 1), 1, #list)]
+end
+
+--- A caliber from a player (tool, dupe, console) held inside the flamethrower range; junk becomes FlameCaliberBase.
+function ACFLazers.ClampFlameCaliber(caliber)
+    local low  = ACFLazers.FlameNumber("FlameCaliberMin")
+    local high = math.max(ACFLazers.FlameNumber("FlameCaliberMax"), low)
+
+    return ACFLazers.ClampNumber(caliber, ACFLazers.FlameNumber("FlameCaliberBase"), low, high)
+end
+
+--- 0 at the smallest flamethrower ... 1 at the biggest. Every "Small .. Big" knob follows it.
+function ACFLazers.GetFlameSizeFraction(caliber)
+    local low  = ACFLazers.FlameNumber("FlameCaliberMin")
+    local high = ACFLazers.FlameNumber("FlameCaliberMax")
+
+    return math.Clamp(((tonumber(caliber) or low) - low) / math.max(high - low, 0.0001), 0, 1)
+end
+
+--- How big the model is for a caliber. 1.0 at FlameCaliberBase (0.5 at 75 mm, 1.5 at 225 mm with the shipped numbers).
+function ACFLazers.GetFlameScale(caliber)
+    return caliber / math.max(ACFLazers.FlameNumber("FlameCaliberBase"), 0.0001)
+end
+
+-- A "Small .. Big" pair of knobs, worked out for a caliber.
+local function FlameSize(caliber, small, big)
+    return Lerp(ACFLazers.GetFlameSizeFraction(caliber), ACFLazers.FlameNumber(small), ACFLazers.FlameNumber(big))
+end
+
+--- kg.
+function ACFLazers.GetFlameMass(caliber) return math.max(FlameSize(caliber, "FlameMassSmall", "FlameMassBig"), 1) end
+
+--- Litres of napalm burned per second of firing.
+function ACFLazers.GetFlameFuelRate(caliber) return math.max(FlameSize(caliber, "FlameFuelSmall", "FlameFuelBig"), 0) end
+
+--- Seconds between two projectiles.
+function ACFLazers.GetFlameShotInterval() return 1 / math.max(ACFLazers.FlameNumber("FlameShotsPerSecond"), 0.01) end
+
+--- Litres of napalm one projectile costs.
+function ACFLazers.GetFlameFuelPerShot(caliber) return ACFLazers.GetFlameFuelRate(caliber) * ACFLazers.GetFlameShotInterval() end
+
+--- Muzzle speed in m/s.
+function ACFLazers.GetFlameSpeed(caliber) return math.max(FlameSize(caliber, "FlameSpeedSmall", "FlameSpeedBig"), 0) end
+
+--- Seconds a thing the sphere touches burns, and a person burns.
+function ACFLazers.GetFlameIgniteSeconds(caliber) return math.max(FlameSize(caliber, "FlameIgniteSmall", "FlameIgniteBig"), 0) end
+
+--- PERCENT OF HOT one touch adds to a part's heat.
+function ACFLazers.GetFlameHeatPct(caliber) return math.max(FlameSize(caliber, "FlameHeatSmall", "FlameHeatBig"), 0) end
+
+--- ACF health points one touch takes from a part that is over the damage threshold.
+function ACFLazers.GetFlameHP(caliber) return math.max(FlameSize(caliber, "FlameHPSmall", "FlameHPBig"), 0) end
+
+--- Damage one touch does to a person.
+function ACFLazers.GetFlamePlayerDamage(caliber) return math.max(FlameSize(caliber, "FlamePlayerDamageSmall", "FlamePlayerDamageBig"), 0) end
+
+--- kJ of heat that `pct` percent of HOT is for a part with this heat capacity (kJ per kelvin): the rise to the HOT temperature x the capacity x pct / 100.
+function ACFLazers.GetFlameHeatKJ(pct, capacity)
+    pct      = tonumber(pct) or 0
+    capacity = tonumber(capacity) or 0
+
+    if pct ~= pct or capacity ~= capacity or pct <= 0 or capacity <= 0 then return 0 end
+
+    return pct / 100 * capacity * ACFLazers.GetHeatRiseHot()
+end
+
+--- Pitch (percent) of the gun's loop: FlameGunPitchSmall at the smallest flamethrower, FlameGunPitchBig at the biggest, a straight line between; held to what the engine takes (20 .. 255).
+function ACFLazers.GetFlameGunPitch(caliber)
+    return math.Clamp(FlameSize(caliber, "FlameGunPitchSmall", "FlameGunPitchBig"), 20, 255)
+end
+
+--- Where the flames start, in model units from the origin of the model: the knobs (at scale 1) times the scale of this caliber. Returns x, y, z.
+function ACFLazers.GetFlameMuzzleOffset(caliber)
+    local s = ACFLazers.GetFlameScale(caliber)
+
+    return ACFLazers.FlameNumber("FlameMuzzleX") * s, ACFLazers.FlameNumber("FlameMuzzleY") * s, ACFLazers.FlameNumber("FlameMuzzleZ") * s
+end
+
+--- ACF's drag coefficient for the flame: FlameDragMult times the coefficient of an ordinary ACF shell of this caliber. ACF works a shell's coefficient out as ProjArea x 0.0001 / ProjMass (cm^2, kg);
+--- for a steel cylinder FlameDragRefLength calibers long the area cancels: 0.0001 / (steel density x length in cm). A bigger flamethrower gets less drag, as a bigger shell does.
+function ACFLazers.GetFlameDragCoef(caliber)
+    local density = (ACF and tonumber(ACF.SteelDensity)) or 7.9e-3 -- kg per cm^3 [SEEN acf/core/globals.lua:292]
+    local length  = math.max(ACFLazers.FlameNumber("FlameDragRefLength"), 0.1) * math.max(tonumber(caliber) or 0, 1) / 10 -- cm
+
+    return math.max(ACFLazers.FlameNumber("FlameDragMult"), 0) * 0.0001 / (density * length)
+end
+
+--- The sphere's diameter (units) when the projectile is `age` seconds old: FlameSphereStart growing in a straight line to FlameSphereGrow times that at FlameLifetime (and no further).
+function ACFLazers.GetFlameSphereDiameter(age)
+    local start = math.max(ACFLazers.FlameNumber("FlameSphereStart"), 0)
+    local t     = math.Clamp((tonumber(age) or 0) / math.max(ACFLazers.FlameNumber("FlameLifetime"), 0.0001), 0, 1)
+
+    return Lerp(t, start, start * math.max(ACFLazers.FlameNumber("FlameSphereGrow"), 0))
+end
+
+--- [22] The game's gravity as the flame feels it, in units per second squared (positive): ACF's own number (its gravity vector) times FlameGravityMult.
+function ACFLazers.GetFlameGravity()
+    local g = ACF and ACF.Gravity and tonumber(ACF.Gravity.z)
+
+    if not g or g ~= g then g = -600 end
+
+    return math.abs(g) * math.max(ACFLazers.FlameNumber("FlameGravityMult"), 0)
+end
+
+--- A pure re-run of ACF's flight maths for the flame, to show what the drag and the gravity do (the tool's readout, and a test): fired level from `height` units above flat ground, the way ACF's
+--- ballistics step it every 1/66 s (drag = coefficient x speed^2 / ACF.DragDiv against the direction of flight, then gravity). Returns { time = seconds flown, distance = units along the ground,
+--- speed = m/s at the end, fraction = that over the muzzle speed, ground = true if it reached the ground before FlameLifetime, speedAfter = the speed in m/s FlameLifetime seconds after the shot if
+--- there were no ground (the fall counts: it is the length of the velocity), sideways = the SIDEWAYS part of that speed in m/s (what the drag has left of the muzzle speed; 22.1) }.
+function ACFLazers.SimulateFlame(caliber, height)
+    local dt       = 1 / 66
+    local life     = ACFLazers.FlameNumber("FlameLifetime")
+    local toInch   = (ACF and tonumber(ACF.MeterToInch)) or 39.3701
+    local div      = (ACF and tonumber(ACF.DragDiv)) or 80
+    local coef     = ACFLazers.GetFlameDragCoef(caliber)
+    local g        = ACFLazers.GetFlameGravity()
+    local vx, vz   = ACFLazers.GetFlameSpeed(caliber) * toInch, 0
+    local x, z, t  = 0, tonumber(height) or 100, 0
+    local ground   = false
+    local free, fx, fz = 0, ACFLazers.GetFlameSpeed(caliber) * toInch, 0
+
+    while t < life do
+        local speed = math.sqrt(vx * vx + vz * vz)
+        local drag  = coef * speed * speed / div
+        local ax    = speed > 0 and -vx / speed * drag or 0
+        local az    = speed > 0 and -vz / speed * drag or 0
+
+        az = az - g
+
+        local nx = x + (vx + 0.5 * ax * dt) * dt
+        local nz = z + (vz + 0.5 * az * dt) * dt
+
+        vx, vz = vx + ax * dt, vz + az * dt
+        t      = t + dt
+
+        if nz <= 0 then
+            local f = z / math.max(z - nz, 1e-9)
+
+            x, z, ground = x + (nx - x) * f, 0, true
+
+            break
+        end
+
+        x, z = nx, nz
+    end
+
+    -- the speed after the full lifetime without a ground
+    local sx, sz = fx, fz
+
+    for _ = 1, math.floor(life / dt + 0.5) do
+        local speed = math.sqrt(sx * sx + sz * sz)
+        local drag  = coef * speed * speed / div
+
+        sx = sx + (speed > 0 and -sx / speed * drag or 0) * dt
+        sz = sz + ((speed > 0 and -sz / speed * drag or 0) - g) * dt
+    end
+
+    free = math.sqrt(sx * sx + sz * sz) / toInch
+
+    local sideways = sx / toInch
+
+    local speed = math.sqrt(vx * vx + vz * vz) / toInch
+    local muzzle = ACFLazers.GetFlameSpeed(caliber)
+
+    return { time = t, distance = x, speed = speed, fraction = muzzle > 0 and speed / muzzle or 0, ground = ground, speedAfter = free, sideways = sideways }
+end
+
+--- Natural cooling of a part that may be on fire. theta = kelvin above room temperature at time `t0`, `now` = the time to work it out for, `mult` = the cooling multiplier of this kind of part, `fireUntil` =
+--- the time its fire ends (nil or not after t0 = it is not on fire), `fireMult` = how fast it cools while on fire (FlameCoolMult). Cooling is exact (ACFLazers.HeatCool), so the two stretches add up.
+function ACFLazers.HeatCoolBurning(theta, t0, now, mult, fireUntil, fireMult)
+    local dt = (tonumber(now) or 0) - (tonumber(t0) or 0)
+
+    if not (theta and dt and dt > 0) then return math.max(tonumber(theta) or 0, 0) end
+
+    fireUntil = tonumber(fireUntil)
+
+    if not fireUntil or fireUntil ~= fireUntil or fireUntil <= t0 then return ACFLazers.HeatCool(theta, dt, mult) end
+
+    local split = math.min(fireUntil, now)
+
+    theta = ACFLazers.HeatCool(theta, split - t0, (tonumber(mult) or 1) * math.max(tonumber(fireMult) or 1, 0))
+
+    if now > split then theta = ACFLazers.HeatCool(theta, now - split, mult) end
+
+    return theta
+end
+
+-- squared distance from a point to an axis-aligned box (0 inside)
+local function PointBoxDistSqr(px, py, pz, mins, maxs)
+    local dx = px < mins.x and mins.x - px or (px > maxs.x and px - maxs.x or 0)
+    local dy = py < mins.y and mins.y - py or (py > maxs.y and py - maxs.y or 0)
+    local dz = pz < mins.z and mins.z - pz or (pz > maxs.z and pz - maxs.z or 0)
+
+    return dx * dx + dy * dy + dz * dz
+end
+
+--- The shortest distance from the segment a -> b to the axis-aligned box [mins, maxs] (all in the SAME space; 0 if they touch or the segment is inside). mins / maxs are anything with .x .y .z.
+--- The distance from a point on a line to a box is a convex function of the position, so a ternary search finds the minimum.
+function ACFLazers.SegmentBoxDistance(ax, ay, az, bx, by, bz, mins, maxs)
+    local dx, dy, dz = bx - ax, by - ay, bz - az
+    local lo, hi = 0, 1
+
+    for _ = 1, 24 do
+        local third = (hi - lo) / 3
+        local t1, t2 = lo + third, hi - third
+        local f1 = PointBoxDistSqr(ax + dx * t1, ay + dy * t1, az + dz * t1, mins, maxs)
+        local f2 = PointBoxDistSqr(ax + dx * t2, ay + dy * t2, az + dz * t2, mins, maxs)
+
+        if f1 < f2 then hi = t2 else lo = t1 end
+    end
+
+    local t = (lo + hi) * 0.5
+
+    return math.sqrt(PointBoxDistSqr(ax + dx * t, ay + dy * t, az + dz * t, mins, maxs))
+end
+
+--- Does a sphere of this radius swept along the segment a -> b touch the box? A cheap rejection first (the segment's own box against the box grown by the radius), then the exact distance.
+function ACFLazers.SegmentTouchesBox(ax, ay, az, bx, by, bz, mins, maxs, radius)
+    radius = math.max(tonumber(radius) or 0, 0)
+
+    if math.max(ax, bx) < mins.x - radius or math.min(ax, bx) > maxs.x + radius then return false end
+    if math.max(ay, by) < mins.y - radius or math.min(ay, by) > maxs.y + radius then return false end
+    if math.max(az, bz) < mins.z - radius or math.min(az, bz) > maxs.z + radius then return false end
+
+    return ACFLazers.SegmentBoxDistance(ax, ay, az, bx, by, bz, mins, maxs) <= radius
+end
+
+--- Everything a player might want to know about a flamethrower of this caliber, as numbers (the tool's readout and the hover text use it).
+function ACFLazers.GetFlameReadout(caliber)
+    local sim   = ACFLazers.SimulateFlame(caliber, 100)
+    local rate  = ACFLazers.GetFlameFuelRate(caliber)
+    local life  = ACFLazers.FlameNumber("FlameLifetime")
+
+    return {
+        caliber      = caliber,
+        scale        = ACFLazers.GetFlameScale(caliber),
+        mass         = ACFLazers.GetFlameMass(caliber),
+        fuelRate     = rate,                                         -- litres per second
+        fuelPerShot  = ACFLazers.GetFlameFuelPerShot(caliber),       -- litres per projectile
+        shots        = ACFLazers.FlameNumber("FlameShotsPerSecond"),
+        speed        = ACFLazers.GetFlameSpeed(caliber),             -- m/s at the muzzle
+        speedAfter   = sim.speedAfter,                               -- m/s after the full lifetime (before the ground), the length of the velocity: the fall counts
+        speedSideways = sim.sideways,                                -- (22.1) m/s of that which is sideways: what the drag leaves of the muzzle speed
+        lifetime     = life,
+        ignite       = ACFLazers.GetFlameIgniteSeconds(caliber),
+        heatPct      = ACFLazers.GetFlameHeatPct(caliber),           -- percent of HOT per touch
+        hp           = ACFLazers.GetFlameHP(caliber),
+        damageAt     = ACFLazers.FlameNumber("FlameDamageHeatPct"),
+        playerDamage = ACFLazers.GetFlamePlayerDamage(caliber),
+        sphereStart  = ACFLazers.GetFlameSphereDiameter(0),
+        sphereEnd    = ACFLazers.GetFlameSphereDiameter(life),
+        drag         = ACFLazers.GetFlameDragCoef(caliber),
+        range        = sim.distance,                                 -- units flown level from 100 units up before the ground
+        seconds      = sim.time,
+    }
 end
