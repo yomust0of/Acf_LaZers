@@ -19,6 +19,9 @@
 -- 22.4 (search for [CHANGED 6]): THE FLAMETHROWER NEVER SETS A PERSON IN A VEHICLE ON FIRE. Heat.CanFlameIgnite is false for a chair (as Heat.CanIgnite) and for a PLAYER who is in a vehicle (Player:InVehicle()),
 --       whatever his chair is and whether or not ACF can hurt it. Behind that a safety net (Heat.SeatFireSweep, SeatPutOut) puts out a person who burns in a vehicle while a fire of the flamethrower is alive
 --       (Heat.NoteFire; only the flamethrower calls it), the console says what lit last. The lazers and the hot-lazer sweep are NOT changed (a lazer still lights a person it hits; Heat.CanIgnite is the 22.2 one).
+-- 22.5 (search for [CHANGED 6]): A PERSON IN A VEHICLE IS IMMUNE TO BURNING PROPS. A burning prop that clips into his hitbox (or stands right beside him) no longer hurts or lights him: the hook
+--       ACFLazers_SeatFireImmune blocks the engine's burn damage (EntityTakeDamage: DMG_BURN from an entityflame / a burning thing that is not him) and puts him out at once, and the safety net (Heat.SeatFireSweep)
+--       also puts out a seated person who burns while a burning prop is within SeatFireRadius (150) of him, whoever lit that prop (Heat.BurningPropNear). Switch: SeatFireImmune (true); radius: SeatFireRadius.
 -- =========================================================================
 
 if not SERVER then return end
@@ -267,6 +270,8 @@ end
 --   SeatPutOut      (true)  [22.4] the safety net behind SeatNoIgnite: a person who is on fire while he sits in a vehicle is put out at once, but only while a fire of the FLAMETHROWER is alive anywhere
 --                           (Heat.NoteFire: the flame projectile notes every fire it lights; it counts until that fire's seconds and SeatFireGrace (10 s) more are over). So a chair-side fire that
 --                           spreads from a prop the flame lit, or one he carried into the chair, is put out too; fire with no flamethrower fire alive is left to the game, to the lazers and to other addons.
+--   SeatFireImmune  (true)  [22.5] a person in a vehicle is immune to BURNING PROPS (whoever lit them): the engine's burn damage from a prop's flame is blocked (hook ACFLazers_SeatFireImmune) and he is put out,
+--                           and the net puts out a seated person who burns while a burning thing (not a player) is within SeatFireRadius (150 units) of him, flamethrower fire alive or not.
 --   SeatSparePlayer (true)  the damage our weapons do to a chair stays with the chair. ACF's own Damage.doVehicleDamage hands every hit on a vehicle to the driver first (as a squishy: damage x 15)
 --                           and then to the vehicle as a prop; our hits are marked (Heat.MarkSpare) and a marked hit on a chair goes to ACF's Damage.doPropDamage alone. A person SITTING in a chair that
 --                           ACF can hurt (Heat.SeatOf) is not touched by the flamethrower and not hit by the lazer beam either: the chair takes what he would have taken. Out of the chair he is a person again.
@@ -343,32 +348,90 @@ end
 
 Heat.PutOutAt = Heat.PutOutAt or setmetatable({}, { __mode = "k" })
 
+--- [22.5] The nearest thing that burns within SeatFireRadius (150) of a person, or nil. Anything on fire that is not a player and not the person himself counts (a prop we lit, a prop another addon lit, a burning
+--- chair), whoever lit it: this is the "prop clipped into his hitbox" case. Returns the entity and its distance. Reads nothing when the radius is 0.
+function Heat.BurningPropNear(ply)
+    local r = tonumber(CFG and CFG.SeatFireRadius)
+
+    if r == nil or r ~= r then r = 150 end
+
+    r = math.Clamp(r, 0, 2000)
+
+    if r <= 0 or not IsValid(ply) then return nil end
+
+    local pos = (ply.WorldSpaceCenter and ply:WorldSpaceCenter()) or ply:GetPos()
+    local ok, list = pcall(ents.FindInSphere, pos, r)
+
+    if not ok or type(list) ~= "table" then return nil end
+
+    local best, bestD
+
+    for _, e in ipairs(list) do
+        if IsValid(e) and e ~= ply and not (e.IsPlayer and e:IsPlayer()) and e.IsOnFire and e:IsOnFire() then
+            local d = e:GetPos():Distance(pos)
+
+            if not bestD or d < bestD then best, bestD = e, d end
+        end
+    end
+
+    return best, bestD
+end
+
+--- [22.5] Why a person who burns in a vehicle must be put out right now, as the text for the console line, or nil when there is no reason (then he is left alone). Two reasons: a fire of the flamethrower
+--- is alive (22.4: SeatPutOut), or something that burns is near him (22.5: SeatFireImmune).
+function Heat.SeatFireReason(ply, now)
+    if not SeatFlag("SeatNoIgnite") then return nil end
+
+    now = now or CurTime()
+
+    if SeatFlag("SeatPutOut") and now <= Heat.OurFireUntil then
+        local last = Heat.LastFire
+
+        return "the last fire of ours: " .. (last and (last.source .. " on " .. tostring(last.ent) .. ", " .. string.format("%.1f", now - last.at) .. " s ago") or "none")
+    end
+
+    if SeatFlag("SeatFireImmune") then
+        local e, d = Heat.BurningPropNear(ply)
+
+        if e then return "a burning " .. tostring(e.GetClass and e:GetClass() or e) .. " is " .. string.format("%.0f", d or 0) .. " units from him" end
+    end
+
+    return nil
+end
+
+--- [22.5] Puts one person out and says so on the console (one line per person per five seconds).
+function Heat.PutOut(ply, now, why)
+    ply:Extinguish()
+
+    if Heat.Burning then Heat.Burning[ply] = nil end
+
+    if now - (Heat.PutOutAt[ply] or -1e9) >= 5 then
+        Heat.PutOutAt[ply] = now
+        Heat.LastPutOut = "[acf_lazers_heat] put out " .. tostring(ply.Nick and ply:Nick() or ply) .. " (burning in a vehicle); " .. why .. "\n"
+
+        Msg(Heat.LastPutOut)
+    end
+end
+
 --- One check. Returns how many people it put out. Safe to call as often as you like.
 function Heat.SeatFireSweep()
-    if not (SeatFlag("SeatNoIgnite") and SeatFlag("SeatPutOut")) then return 0 end
+    if not SeatFlag("SeatNoIgnite") then return 0 end
+    if not (SeatFlag("SeatPutOut") or SeatFlag("SeatFireImmune")) then return 0 end
 
     local now = CurTime()
 
-    if now > Heat.OurFireUntil then return 0 end
+    if not SeatFlag("SeatFireImmune") and now > Heat.OurFireUntil then return 0 end
 
     local count = 0
 
     for _, ply in ipairs(player.GetAll()) do
         if IsValid(ply) and ply:Alive() and ply:InVehicle() and ply:IsOnFire() then
-            ply:Extinguish()
+            local why = Heat.SeatFireReason(ply, now)
 
-            if Heat.Burning then Heat.Burning[ply] = nil end
+            if why then
+                Heat.PutOut(ply, now, why)
 
-            count = count + 1
-
-            if now - (Heat.PutOutAt[ply] or -1e9) >= 5 then -- one console line per person per five seconds
-                local last = Heat.LastFire
-
-                Heat.PutOutAt[ply] = now
-                Heat.LastPutOut = "[acf_lazers_heat] put out " .. tostring(ply.Nick and ply:Nick() or ply) .. " (burning in a vehicle); the last fire of ours: " ..
-                    (last and (last.source .. " on " .. tostring(last.ent) .. ", " .. string.format("%.1f", now - last.at) .. " s ago") or "none") .. "\n"
-
-                Msg(Heat.LastPutOut)
+                count = count + 1
             end
         end
     end
@@ -377,6 +440,42 @@ function Heat.SeatFireSweep()
 end
 
 timer.Create("ACFLazers_SeatFire", 0.2, 0, function() Heat.SeatFireSweep() end)
+
+--- [22.5] THE DAMAGE. The engine's burn damage from a burning prop (the flame of a prop that clips into the hitbox) is blocked for a person in a vehicle, and he is put out on the spot. The damage counts as
+--- a prop's when its inflictor is a flame (class entityflame) that is NOT stuck to him, or a burning thing that is not him and not a player. A flame stuck to him (he caught fire) is blocked too while
+--- Heat.SeatFireReason finds a reason (a flamethrower fire alive, a burning thing near him). Our own weapons' damage is not DMG_BURN at the engine (ACF applies it with Entity:TakeDamage) and is not touched.
+function Heat.SeatBurnBlocked(target, dmg)
+    if not (SeatFlag("SeatNoIgnite") and SeatFlag("SeatFireImmune")) then return false end
+    if not (IsValid(target) and target.IsPlayer and target:IsPlayer() and target.InVehicle and target:InVehicle()) then return false end
+    if not (dmg and dmg.IsDamageType and dmg:IsDamageType(DMG_BURN)) then return false end
+
+    local src = dmg.GetInflictor and dmg:GetInflictor() or nil
+    local why
+
+    if IsValid(src) and src ~= target then
+        local class = src.GetClass and src:GetClass() or ""
+
+        if class == "entityflame" then
+            local parent = src.GetParent and src:GetParent() or nil
+
+            if parent ~= target then why = "burn damage from a flame on " .. tostring(IsValid(parent) and parent or "nothing") .. " blocked" end
+        elseif not (src.IsPlayer and src:IsPlayer()) and src.IsOnFire and src:IsOnFire() then
+            why = "burn damage from the burning " .. tostring(class) .. " blocked"
+        end
+    end
+
+    why = why or Heat.SeatFireReason(target, CurTime())
+
+    if not why then return false end
+
+    if target.IsOnFire and target:IsOnFire() then Heat.PutOut(target, CurTime(), why) end
+
+    return true
+end
+
+hook.Add("EntityTakeDamage", "ACFLazers_SeatFireImmune", function(target, dmg)
+    if Heat.SeatBurnBlocked(target, dmg) then return true end
+end)
 
 -- The chair's own ACF_OnDamage (what ACF's dealDamage does for a "Vehicle" is Damage.doVehicleDamage; this is that, except for a marked hit).
 local function SeatOnDamage(self, DmgResult, DmgInfo)
