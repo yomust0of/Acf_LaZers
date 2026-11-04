@@ -16,6 +16,9 @@
 --       Reply the Heat Checker tool uses, and the console command acf_lazers_heat_scan. Reads only: nothing here changes any heat.
 -- 22.2 (search for [CHANGED 5]): SEATS. Nothing of ours ever sets a chair (any vehicle seat) on fire (Heat.CanIgnite), and the damage our weapons do to a chair (heat, the lazer beam, the PPC blast) is the
 --       chair's alone: ACF's own vehicle damage also hurts the person sitting in it (15 times over, as a squishy), so a marked hit is handed to ACF's plain prop damage instead (Heat.SeatOf, Heat.MarkSpare).
+-- 22.4 (search for [CHANGED 6]): THE FLAMETHROWER NEVER SETS A PERSON IN A VEHICLE ON FIRE. Heat.CanFlameIgnite is false for a chair (as Heat.CanIgnite) and for a PLAYER who is in a vehicle (Player:InVehicle()),
+--       whatever his chair is and whether or not ACF can hurt it. Behind that a safety net (Heat.SeatFireSweep, SeatPutOut) puts out a person who burns in a vehicle while a fire of the flamethrower is alive
+--       (Heat.NoteFire; only the flamethrower calls it), the console says what lit last. The lazers and the hot-lazer sweep are NOT changed (a lazer still lights a person it hits; Heat.CanIgnite is the 22.2 one).
 -- =========================================================================
 
 if not SERVER then return end
@@ -259,7 +262,11 @@ end
 -- ===================== SEATS ===================== [CHANGED 5]
 -- (22.2) Two rules about chairs (every seat and vehicle: Entity:IsVehicle()), each with a switch in the config that is OPTIONAL (a config without it means "on"):
 --   SeatNoIgnite    (true)  nothing of ours ever sets a chair on fire: the lazer beam, the flamethrower and anything that asks Heat.CanIgnite. The chair still takes heat and ACF damage and melts;
---                           the person in it is not lit while he sits (he is, once the chair is gone and he stands in the fire).
+--                           the person in it is not lit while he sits (he is, once the chair is gone and he stands in the fire). [22.4] The FLAMETHROWER (only it) also never lights ANY person in a vehicle
+--                           (Player:InVehicle()), even when the chair is one ACF cannot hurt or one a safezone protects (Heat.CanFlameIgnite). A lazer is as in 22.2.
+--   SeatPutOut      (true)  [22.4] the safety net behind SeatNoIgnite: a person who is on fire while he sits in a vehicle is put out at once, but only while a fire of the FLAMETHROWER is alive anywhere
+--                           (Heat.NoteFire: the flame projectile notes every fire it lights; it counts until that fire's seconds and SeatFireGrace (10 s) more are over). So a chair-side fire that
+--                           spreads from a prop the flame lit, or one he carried into the chair, is put out too; fire with no flamethrower fire alive is left to the game, to the lazers and to other addons.
 --   SeatSparePlayer (true)  the damage our weapons do to a chair stays with the chair. ACF's own Damage.doVehicleDamage hands every hit on a vehicle to the driver first (as a squishy: damage x 15)
 --                           and then to the vehicle as a prop; our hits are marked (Heat.MarkSpare) and a marked hit on a chair goes to ACF's Damage.doPropDamage alone. A person SITTING in a chair that
 --                           ACF can hurt (Heat.SeatOf) is not touched by the flamethrower and not hit by the lazer beam either: the chair takes what he would have taken. Out of the chair he is a person again.
@@ -282,6 +289,15 @@ function Heat.CanIgnite(ent)
     return not Heat.IsSeat(ent)
 end
 
+--- [22.4] May the FLAMETHROWER set this on fire? False for a chair (Heat.CanIgnite) and for a PLAYER who is in a vehicle (Player:InVehicle()), while SeatNoIgnite is on; true for everything else.
+function Heat.CanFlameIgnite(ent)
+    if not Heat.CanIgnite(ent) then return false end
+    if not SeatFlag("SeatNoIgnite") then return true end
+    if IsValid(ent) and ent.IsPlayer and ent:IsPlayer() and ent.InVehicle and ent:InVehicle() then return false end
+
+    return true
+end
+
 --- The chair a person is SPARED by, or nil. Only a player who sits in a chair that ACF can damage (ACF.Check answers) and only while SeatSparePlayer is on: a seat ACF cannot hurt could never melt, and
 --- sparing the person in it would make him unkillable.
 function Heat.SeatOf(ply)
@@ -302,6 +318,65 @@ function Heat.MarkSpare(info)
 
     return info
 end
+
+-- [22.4] THE SAFETY NET. Every Entity:Ignite of the FLAMETHROWER tells Heat.NoteFire what it lit and for how long (the lazers do not). While any of those fires is alive (plus SeatFireGrace seconds, 10 unless
+-- the config says), a person who is on fire in a vehicle is put out by a 0.2 s timer. Nothing is looked at when no flame fire is alive (one number is compared).
+Heat.OurFireUntil = Heat.OurFireUntil or 0
+
+function Heat.NoteFire(source, ent, seconds)
+    local now   = CurTime()
+    local life  = tonumber(seconds) or 0
+    local grace = tonumber(CFG and CFG.SeatFireGrace)
+
+    if life ~= life or life < 0 then life = 0 end
+    if grace == nil or grace ~= grace then grace = 10 end
+
+    life  = math.min(life, 3600)
+    grace = math.Clamp(grace, 0, 3600)
+
+    local stop = now + life + grace
+
+    if stop > Heat.OurFireUntil then Heat.OurFireUntil = stop end
+
+    Heat.LastFire = { source = tostring(source or "?"), ent = ent, at = now, life = life }
+end
+
+Heat.PutOutAt = Heat.PutOutAt or setmetatable({}, { __mode = "k" })
+
+--- One check. Returns how many people it put out. Safe to call as often as you like.
+function Heat.SeatFireSweep()
+    if not (SeatFlag("SeatNoIgnite") and SeatFlag("SeatPutOut")) then return 0 end
+
+    local now = CurTime()
+
+    if now > Heat.OurFireUntil then return 0 end
+
+    local count = 0
+
+    for _, ply in ipairs(player.GetAll()) do
+        if IsValid(ply) and ply:Alive() and ply:InVehicle() and ply:IsOnFire() then
+            ply:Extinguish()
+
+            if Heat.Burning then Heat.Burning[ply] = nil end
+
+            count = count + 1
+
+            if now - (Heat.PutOutAt[ply] or -1e9) >= 5 then -- one console line per person per five seconds
+                local last = Heat.LastFire
+
+                Heat.PutOutAt[ply] = now
+                Heat.LastPutOut = "[acf_lazers_heat] put out " .. tostring(ply.Nick and ply:Nick() or ply) .. " (burning in a vehicle); the last fire of ours: " ..
+                    (last and (last.source .. " on " .. tostring(last.ent) .. ", " .. string.format("%.1f", now - last.at) .. " s ago") or "none") .. "\n"
+
+                Msg(Heat.LastPutOut)
+            end
+        end
+    end
+
+    return count
+end
+
+timer.Create("ACFLazers_SeatFire", 0.2, 0, function() Heat.SeatFireSweep() end)
 
 -- The chair's own ACF_OnDamage (what ACF's dealDamage does for a "Vehicle" is Damage.doVehicleDamage; this is that, except for a marked hit).
 local function SeatOnDamage(self, DmgResult, DmgInfo)

@@ -82,7 +82,7 @@ local OVERLAY_DELAY_DEFAULT    = 0.25 -- seconds, the hover-text buffer of this 
 ENT.OverlayDelay = math.max(tonumber(LASER_CONFIG.LazerOverlayDelay) or OVERLAY_DELAY_DEFAULT, 0) -- [CHANGED 8] ACF's hover-text buffer for this entity (ACF's own default is 1 s)
 
 -- Which version of this file is running. It is printed to the server console when the file loads, and every notice below carries it.
-local VERSION = "22.2" -- [CHANGED 1] [CHANGED 12] [CHANGED 13] (21: the muzzle hum scales with the size: ACFLazers.GetMuzzleSound, PlayEx; 22.2: chairs: never set on fire, and the person in one is spared)
+local VERSION = "22.4" -- [CHANGED 1] [CHANGED 12] [CHANGED 13] (21: the muzzle hum scales with the size: ACFLazers.GetMuzzleSound, PlayEx; 22.2: chairs: never set on fire, and the person in one is spared; 22.4: the same file as 22.2, only this version line changed)
 MsgN("[acf_lazer] init.lua version " .. VERSION .. " loaded")
 
 -- [CHANGED 11] (15.7) How many lazers one player may own: GMod reads a server variable called sbox_max<name> (the spawn function below asks ply:CheckLimit("acf_lazers")), and CreateConVar does

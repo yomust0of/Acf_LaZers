@@ -19,6 +19,8 @@
 --       - 22.2 CHAIRS: a chair (any vehicle seat) is a part like any other, EXCEPT that it is never set on fire (it still takes heat and ACF health, and melts), and a person SITTING in one is not touched as a
 --         person: the chair is touched in his place (once per projectile, and as a part: it ends the projectile like any part). Out of the chair (or in a chair ACF cannot hurt, or one a safezone protects)
 --         he is a person again. Switches in the config, both optional and on: SeatNoIgnite, SeatSparePlayer (the SEATS section of lua/autorun/acf_lazers_heat.lua).
+--       - 22.4: a person who is in a vehicle (Player:InVehicle()) is NEVER set on fire by the flamethrower, whatever his chair is (one ACF cannot hurt, one a safezone or a permission protects ...: he may take
+--         the flame's damage there, but he does not burn). Behind that the heat file puts out a person who burns in a vehicle while a fire of this projectile is alive (Heat.NoteFire, SeatPutOut, SeatFireGrace).
 --     The projectile's thin ray (ACF's flight) looks through people (hook ACF_OnFilterBullet below), so it only ever ends on a part, the ground or its lifetime.
 --     NOT touched: the shooter's own contraption (the projectile's filter, copied from the contraption at the muzzle; a player sitting in it is not touched either), anything in a safezone, anything
 --     ACF's damage permissions refuse, anything a listener of the hook ACFLazers_CanFlame (ent, gun) answers false for.
@@ -123,8 +125,9 @@ if SERVER then
     -- Entity:Ignite restarts a fire each time it is called; once in half a second is plenty.
     local function IgniteThrottled(Ent, Seconds)
         local Heat = ACFLazers.Heat
+        local Can  = Heat and (Heat.CanFlameIgnite or Heat.CanIgnite)
 
-        if Heat and Heat.CanIgnite and not Heat.CanIgnite(Ent) then return end -- [22.2] never a chair
+        if Can and not Can(Ent) then return end -- [22.2] never a chair, [22.4] never a person in a vehicle (Heat.CanFlameIgnite; an older heat file only knows the chair)
 
         local Now = CurTime()
 
@@ -133,6 +136,8 @@ if SERVER then
         Ent.ACFLazers_NextFlameIgnite = Now + 0.5
 
         Ent:Ignite(Seconds)
+
+        if Heat and Heat.NoteFire then Heat.NoteFire("flamethrower", Ent, Seconds) end -- [22.4] the safety net in the heat file wants to know about every fire of the flamethrower
     end
 
     -- A PERSON: damage and fire, and the projectile goes on.
