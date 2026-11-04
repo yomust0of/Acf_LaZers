@@ -26,6 +26,10 @@
 --   * THE IMPACT EVENT (16.9): right after the blast (the same safezone rules: a PPC that makes no blast makes no event) the hook ACFLazers_PPCImpact is run with (position, caliber in mm, the projectile).
 --     The fusion engines listen to it: a PPC that goes off within 300 units of one cuts its operating percent. Nothing else in the addon listens; a failing listener never breaks the blast.
 --
+-- 20: THE BLAST'S DAMAGE. While the config flag PPCOwnDamage is on (the default) the hook below replaces ACF's damage number for a PROP with the config's own (ACFLazers.GetPPCBlastDamage: the part's area x S x F(x) x A,
+--   see "THE BLAST'S DAMAGE MODEL" in the config) times the shot's age factor, through ACF's "custom damage" field of the damage result. ACF still chooses the targets, the line of sight, the permissions and what blocks
+--   what (and its penetration "loss" still works out from its own numbers). People (ACF "Squishy") and anything the hook cannot measure take the old path (the area x PPCPropDamageScalar), and so does everything when
+--   PPCOwnDamage is off or the config is older than 20. The heat pass below the explosion is unchanged: it adds up what ACF will deal.
 -- 19: THE BALL'S LOOK (client hook at the bottom): the material is models/alyx/emptool_glow (config PPCBallMaterial) and the ball is tinted with the colour the PPC networked (FlightColor: the colour picked in the
 --   PPC tool), always with alpha 255. The size comes from the PPC (config PPCBallSizeSmall .. PPCBallSizeBig). Nothing about the blast changed.
 -- =========================================================================
@@ -136,15 +140,21 @@ if SERVER then
                 local TimeMult = Config.GetPPCDamageMult(Age)
                 local Fragment = math.max(Filler * Config.PPCNumber("PPCFragMassRatio"), 0.001) -- a zero casing would divide by zero inside ACF's explosion
                 local DmgInfo  = Objects.DamageInfo(Bullet.Owner, Bullet.Gun)
+
+                if ACFLazers.Heat and ACFLazers.Heat.MarkSpare then ACFLazers.Heat.MarkSpare(DmgInfo) end -- [22.2] a chair takes the blast alone: ACF does not hand it on to the person sitting in it
                 local Radius   = Damage.getBlastRadius(Filler)
 
                 local Hits = {} -- [CHANGED 28] entity -> the damage points this explosion did to it (filled by the hook below)
 
                 Active = {
-                    Info  = DmgInfo,
-                    Blast = Config.PPCNumber("PPCPropDamageScalar") * TimeMult,
-                    Frag  = Config.PPCNumber("PPCFragmentScalar") * TimeMult,
-                    Hits  = Hits,
+                    Info    = DmgInfo,
+                    Blast   = Config.PPCNumber("PPCPropDamageScalar") * TimeMult,
+                    Frag    = Config.PPCNumber("PPCFragmentScalar") * TimeMult,
+                    Hits    = Hits,
+                    Own     = (Config.GetPPCBlastDamage and Config.PPCFlag and Config.PPCFlag("PPCOwnDamage")) and true or false, -- [20] the config's own damage model for props
+                    Radius  = Radius,                                      -- [20] the blast radius (units): distance / this is x of the falloff
+                    Caliber = Bullet.PPCCaliber or ((Bullet.Caliber or 0) * 10), -- [20] mm (the PPC writes it on the projectile; an old projectile falls back on ACF's centimetres)
+                    Time    = TimeMult,                                    -- [20] the shot's age factor
                 }
 
                 -- pcall: if ACF's explosion throws, the multipliers must not stay switched on for the next explosion
@@ -182,6 +192,30 @@ if SERVER then
 
     -- ACF calls this for every thing it damages, with the DamageResult it worked out (Area x (penetration / thickness)^2 is the damage) and the DamageInfo. Our explosion's DamageInfo is marked
     -- by the table above; scaling the Area scales the damage in a straight line and leaves ACF's penetration and loss maths alone.
+    -- [20] The config's own damage for a PROP the blast reached, or nil when this hit must take the old path (people, a part without a usable area, a damage info without positions, a radius of 0).
+    -- x = how far the part was hit from the centre as a share of the blast radius; the armour and the penetration are the ones ACF put in the damage result.
+    local function OwnBlastDamage(Ent, DmgResult, DmgInfo, Blast)
+        if not Blast.Own or not IsValid(Ent) then return nil end
+
+        local Data = Ent.ACF
+
+        if type(Data) ~= "table" or Data.Type == "Squishy" then return nil end
+
+        local Area   = tonumber(Data.Area)
+        local Radius = tonumber(Blast.Radius)
+        local Origin = DmgInfo:GetOrigin()
+        local HitPos = DmgInfo:GetHitPos()
+
+        if not Area or Area ~= Area or Area <= 0 or not Radius or Radius ~= Radius or Radius <= 0 then return nil end
+        if not (isvector(Origin) and isvector(HitPos)) then return nil end
+
+        local Taken = ACFLazers.GetPPCBlastDamage(Area, DmgResult:GetThickness(), DmgResult:GetPenetration(), (HitPos - Origin):Length() / Radius, Blast.Caliber) * (tonumber(Blast.Time) or 1)
+
+        if Taken ~= Taken then return nil end
+
+        return Taken
+    end
+
     hook.Add("ACF_OnDamageEntity", "ACFLazers_PPCBlast", function(Ent, DmgResult, DmgInfo)
         local Blast = Active
 
@@ -198,11 +232,17 @@ if SERVER then
             return
         end
 
-        DmgResult:SetArea(DmgResult:GetArea() * Mult)
+        local Own = Kind == DMG_BLAST and OwnBlastDamage(Ent, DmgResult, DmgInfo, Blast) or nil
 
-        local Custom = DmgResult:GetDamage() -- "custom damage": ACF's own explosion does not set it, but if something did, it is scaled the same way
+        if Own then
+            DmgResult:SetDamage(Own) -- [20] ACF's "custom damage": Compute() hands it back as the damage, the penetration loss is still ACF's
+        else
+            DmgResult:SetArea(DmgResult:GetArea() * Mult)
 
-        if isnumber(Custom) then DmgResult:SetDamage(Custom * Mult) end
+            local Custom = DmgResult:GetDamage() -- "custom damage": ACF's own explosion does not set it, but if something did, it is scaled the same way
+
+            if isnumber(Custom) then DmgResult:SetDamage(Custom * Mult) end
+        end
 
         -- [CHANGED 28] what this hit does, as ACF will work it out (DamageResult:Compute is the very call ACF's damage handler makes), is kept for the heat pass
         if Blast.Hits and IsValid(Ent) then

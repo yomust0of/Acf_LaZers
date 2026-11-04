@@ -82,7 +82,7 @@ local OVERLAY_DELAY_DEFAULT    = 0.25 -- seconds, the hover-text buffer of this 
 ENT.OverlayDelay = math.max(tonumber(LASER_CONFIG.LazerOverlayDelay) or OVERLAY_DELAY_DEFAULT, 0) -- [CHANGED 8] ACF's hover-text buffer for this entity (ACF's own default is 1 s)
 
 -- Which version of this file is running. It is printed to the server console when the file loads, and every notice below carries it.
-local VERSION = "21" -- [CHANGED 1] [CHANGED 12] (21: the muzzle hum scales with the size: ACFLazers.GetMuzzleSound, PlayEx)
+local VERSION = "22.2" -- [CHANGED 1] [CHANGED 12] [CHANGED 13] (21: the muzzle hum scales with the size: ACFLazers.GetMuzzleSound, PlayEx; 22.2: chairs: never set on fire, and the person in one is spared)
 MsgN("[acf_lazer] init.lua version " .. VERSION .. " loaded")
 
 -- [CHANGED 11] (15.7) How many lazers one player may own: GMod reads a server variable called sbox_max<name> (the spawn function below asks ply:CheckLimit("acf_lazers")), and CreateConVar does
@@ -960,6 +960,8 @@ function ENT:ReportPropHit(target, tr, hpBefore, HitRes, DmgInfo, damageCallOk)
 end
 
 local function IgniteThrottled(target, seconds)
+    if Heat.CanIgnite and not Heat.CanIgnite(target) then return end -- [CHANGED 13] (22.2) never a chair (Heat.CanIgnite, heat file: SeatNoIgnite)
+
     local now = CurTime()
 
     if (target.ACFLazers_NextIgnite or 0) > now then return end
@@ -1036,6 +1038,8 @@ function ENT:DamageProp(target, tr, dir, dt, focal, doEffects, beam)
     local DmgResult = Objects.DamageResult(area, pen, armour, angle, armour / (caliber * 0.1), 1)
     local DmgInfo   = Objects.DamageInfo(self:GetAttacker(), self, DMG_ENERGYBEAM, self:GetMuzzlePos(), tr.HitPos, tr.HitGroup)
 
+    if Heat.MarkSpare then Heat.MarkSpare(DmgInfo) end -- [CHANGED 13] (22.2) a chair takes this hit alone: ACF does not hand it on to the person sitting in it (heat file, SEATS)
+
     -- pcall = "call it, but if it errors give me the error instead of stopping". Hooks from OTHER addons run inside ACF's dealDamage; if one errors, the
     -- error used to abort this whole function (no fire, no sparks, no pass-through) while the player damage, which does not use ACF, still worked.
     -- [GUESS] that this is (part of) what you saw in multiplayer. Now the error is printed and we carry on with the rest.
@@ -1086,7 +1090,7 @@ function ENT:DamageProp(target, tr, dir, dt, focal, doEffects, beam)
     -- Direct hits only: no fire on anything BEHIND a plate the beam burned through (beam.penetrated is set further down,
     -- so the plate being burned through still counts as a direct hit and can burn).
     -- IsFlammable also gets the prop now: explosive props (barrels, gas cans ...) burn like wood.
-    local fireStep = accepted and not beam.penetrated and IsValid(target) and ACFLazers.IsFlammable(tr.MatType, target) -- accepted = ACF really damaged it
+    local fireStep = accepted and not beam.penetrated and IsValid(target) and (not Heat.CanIgnite or Heat.CanIgnite(target)) and ACFLazers.IsFlammable(tr.MatType, target) -- accepted = ACF really damaged it; [CHANGED 13] never a chair
 
     if fireStep then
         IgniteThrottled(target, ACFLazers.GetBurnSeconds(caliber))
@@ -1172,6 +1176,25 @@ function ENT:ProcessLaserImpact(tr, dir, dt, doEffects, beam)
         focal = beam.penMult
     end
 
+    -- [CHANGED 13] (22.2) A PERSON SITTING IN A CHAIR IS SPARED, THE CHAIR TAKES THE BEAM. The chair is damaged as if the beam had hit it (with the strength the beam has here; a copy of the beam's state is
+    -- used, so the chair does not change what the beam does next) and the person takes nothing: no damage, no fire, no disintegration. The beam goes on through him as it always did. A chair that is
+    -- protected by a safezone (or one ACF cannot hurt) spares nobody: the person is hit as before. Heat.SeatOf is nil with SeatSparePlayer off.
+    if isPerson and Heat.SeatOf and target:IsPlayer() then
+        local seat = Heat.SeatOf(target)
+
+        if seat and not (LASER_CONFIG.ProtectSafezoneProps and IsEntityInSafezone(seat)) then
+            beam.seats = beam.seats or {}
+
+            if not beam.seats[seat] then
+                beam.seats[seat] = true
+
+                self:DamageProp(seat, tr, dir, dt, focal, doEffects, { scale = beam.scale, penetrated = beam.penetrated, penMult = beam.penMult })
+            end
+
+            return true
+        end
+    end
+
     if isPerson then
         self:DamagePerson(target, dt, focal, beam)
         return true -- the beam always passes through people / NPCs
@@ -1189,6 +1212,16 @@ function ENT:ProcessLaserImpact(tr, dir, dt, doEffects, beam)
         end
 
         return true
+    end
+
+    -- [CHANGED 13] (22.2) a chair that already took this beam through the person sitting in it is not damaged twice: the beam still meets it (what the chair does to the beam is worked out as always) but with
+    -- a time slice of 0 its damage area is 0
+    if Heat.IsSeat and Heat.IsSeat(target) then
+        beam.seats = beam.seats or {}
+
+        if beam.seats[target] then dt = 0 end
+
+        beam.seats[target] = true
     end
 
     return self:DamageProp(target, tr, dir, dt, focal, doEffects, beam)

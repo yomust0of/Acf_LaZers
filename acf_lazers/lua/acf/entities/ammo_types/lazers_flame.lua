@@ -1,5 +1,5 @@
 -- =========================================================================
--- THE FLAMETHROWER'S PROJECTILE  (22; 22.1: the fire sprites widen with the sphere, the drag is 40 x a shell's)
+-- THE FLAMETHROWER'S PROJECTILE  (22; 22.1: the fire sprites widen with the sphere, the drag is 40 x a shell's; 22.2: chairs are never set on fire, and the person in one is spared)
 -- Goes to:  lua/acf/entities/ammo_types/lazers_flame.lua      (NEW FILE. ACF loads every file of that folder in every addon, server and client, with no AddCSLuaFile needed)
 --
 -- An ACF "ammo type" is the rulebook of one kind of projectile: what happens when it hits something and how it is drawn. This one is only ever fired by the flamethrower (acf_flamer names it on every
@@ -16,6 +16,9 @@
 --         destroys it). The first part touched starts the FlameLinger (0.05 s) clock: the projectile ends then (an ACF "fuze"), so the flame does not go through a vehicle.
 --         A plain prop (not an "acf_" entity) that is on fire from this cools FlameCoolMult as fast (lua/autorun/acf_lazers_heat.lua).
 --       - a PERSON (ACF's "Squishy": players, NPCs): FlamePlayerDamageSmall .. Big damage and the same fire. The projectile goes on.
+--       - 22.2 CHAIRS: a chair (any vehicle seat) is a part like any other, EXCEPT that it is never set on fire (it still takes heat and ACF health, and melts), and a person SITTING in one is not touched as a
+--         person: the chair is touched in his place (once per projectile, and as a part: it ends the projectile like any part). Out of the chair (or in a chair ACF cannot hurt, or one a safezone protects)
+--         he is a person again. Switches in the config, both optional and on: SeatNoIgnite, SeatSparePlayer (the SEATS section of lua/autorun/acf_lazers_heat.lua).
 --     The projectile's thin ray (ACF's flight) looks through people (hook ACF_OnFilterBullet below), so it only ever ends on a part, the ground or its lifetime.
 --     NOT touched: the shooter's own contraption (the projectile's filter, copied from the contraption at the muzzle; a player sitting in it is not touched either), anything in a safezone, anything
 --     ACF's damage permissions refuse, anything a listener of the hook ACFLazers_CanFlame (ent, gun) answers false for.
@@ -119,6 +122,10 @@ if SERVER then
 
     -- Entity:Ignite restarts a fire each time it is called; once in half a second is plenty.
     local function IgniteThrottled(Ent, Seconds)
+        local Heat = ACFLazers.Heat
+
+        if Heat and Heat.CanIgnite and not Heat.CanIgnite(Ent) then return end -- [22.2] never a chair
+
         local Now = CurTime()
 
         if (Ent.ACFLazers_NextFlameIgnite or 0) > Now then return end
@@ -167,7 +174,7 @@ if SERVER then
         local Seconds = ACFLazers.GetFlameIgniteSeconds(Caliber)
 
         if Heat then
-            if Seconds > 0 and Heat.SetFire then Heat.SetFire(Ent, Seconds) end
+            if Seconds > 0 and Heat.SetFire and (not Heat.CanIgnite or Heat.CanIgnite(Ent)) then Heat.SetFire(Ent, Seconds) end -- [22.2] (a chair is not on fire, so it does not cool as if it were)
 
             local KJ = ACFLazers.GetFlameHeatKJ(ACFLazers.GetFlameHeatPct(Caliber), Heat.GetCapacity(Ent))
 
@@ -230,7 +237,21 @@ if SERVER then
 
                     if Type == "Squishy" then
                         -- a person sitting in the shooter's own vehicle is part of the shooter's contraption
-                        if not (Ent.InVehicle and Ent:InVehicle() and Set[Ent:GetVehicle()]) then TouchPerson(Bullet, Ent) end
+                        if not (Ent.InVehicle and Ent:InVehicle() and Set[Ent:GetVehicle()]) then
+                            -- [22.2] a person sitting in a chair is spared: the chair is touched in his place (heat, health, never fire). A chair that refuses (a safezone, a permission) spares nobody.
+                            local Heat = ACFLazers.Heat
+                            local Seat = Heat and Heat.SeatOf and Heat.SeatOf(Ent)
+
+                            if Seat and Allowed(Bullet, Seat) then
+                                if Candidate(Bullet, Seat, Set) then
+                                    Bullet.FlameHit[Seat] = true
+
+                                    TouchPart(Bullet, Seat)
+                                end
+                            else
+                                TouchPerson(Bullet, Ent)
+                            end
+                        end
                     elseif Type then
                         TouchPart(Bullet, Ent)
                     end

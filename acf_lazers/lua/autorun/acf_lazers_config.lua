@@ -397,13 +397,13 @@ table.Merge(ACFLazers.Config, {
     FusionDamagedEfficiency = 0.5, -- the health efficiency at 0% health (1 at 100%, a straight line between)
     FusionChargeSeconds = 10,     -- [GUESS] the charge at 100% operating is this many seconds of the engine's full output, in kJ (6500 hp: 338,000 kJ = 42 kg of HE; 250 hp: 13,000 kJ = 1.6 kg)
     FusionChargeDrainSeconds = 60, -- [GUESS] seconds for a FULL charge to drain away when the operating percent is not holding it up
-    FusionBlastMult     = 1,      -- 1 = the charge becomes HE at ACF's rate (kJ / ACF.HEPower kg). Raise it for bigger bangs
+    FusionBlastMult     = 5,      -- 1 = the charge becomes HE at ACF's rate (kJ / ACF.HEPower kg). Raise it for bigger bangs
     FusionBlastMinKJ    = 0.1,    -- kJ. A floor so an engine with no charge still pops a tiny bit (never exactly 0), like the capacitor's CapReleaseMinKJ
     -- HUM [17]. A looping sound that follows the operating percent: silent at 0%, louder and higher in pitch as it climbs, so you can hear how hard the engine is working. A bigger engine (by FusionSizeCurve's size
     -- fraction, the same curve as its model) hums louder, deeper and carries farther. The sound is played from the SERVER, so everybody near hears it.
     FusionHumSound      = "ambient/machines/refrigerator.wav", -- [21] your pick (17 to 20: ambient/machines/power_transformer_loop_1.wav). [GUESS] that it loops by itself. "" = no hum. Other candidates: ambient/machines/power_transformer_loop_1.wav, ambient/machines/combine_shield_loop3.wav, ambient/energy/force_field_loop1.wav
-    FusionHumVolumeSmall = 0.3,   -- [GUESS] volume (0..1) at 100% operating for the smallest engine (it scales straight down with the operating percent)
-    FusionHumVolumeBig  = 1,      -- [GUESS] ... and for the biggest
+    FusionHumVolumeSmall = 1,   -- [GUESS] volume (0..1) at 100% operating for the smallest engine (it scales straight down with the operating percent)
+    FusionHumVolumeBig  = 3,      -- [GUESS] ... and for the biggest
     FusionHumPitchSmall = 125,    -- [GUESS] pitch (100 = the file as it is) at 100% operating for the smallest engine
     FusionHumPitchBig   = 70,     -- [GUESS] ... and for the biggest (deeper)
     FusionHumPitchIdle  = 0.5,    -- [GUESS] the pitch at 0% operating as a multiple of the pitch at 100% (a straight line between: it whines up as it spins up)
@@ -650,7 +650,7 @@ table.Merge(ACFLazers.Config, {
     PPCMassMin        = 255,    -- [CHANGED 30] (16.8: was 120; 16.7: was 60) kg at PPCCurveStart (20 mm; nothing is built at it). The smallest PPC you can build (50 mm) is 355 kg now (16.7: 222, 16.6: 163), 100 mm 969 (845, 790), 200 mm 3869 (3790, 3755), 300 mm 9000. An exact doubling of the 16.6 50 mm PPC (326 kg) would be 225
     PPCMassMax        = 9000,   -- kg at PPCCaliberMax
     PPCMassExponent   = 2,      -- bends the mass curve (bigger = small PPCs stay light for longer)
-    PPCArmourMult     = 0.5,    -- multiplier on the armour ACF would give (caliber x ACF.ArmorMod): half, like the lazer
+    PPCArmourMult     = 1,    -- multiplier on the armour ACF would give (caliber x ACF.ArmorMod): half, like the lazer
     PPCHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
 
     -- ENERGY PER SHOT, in kJ. The size curve: PPCEnergyCurve 0 = a straight line, 1 = fully exponential, in between = a mix (the same shape rule as LazerDrawCurve). Damage follows the energy: the more a shot
@@ -682,11 +682,11 @@ table.Merge(ACFLazers.Config, {
     PPCBallColorB     = 255,    -- [19] blue 0 to 255
 
     -- THE EXPLOSION. HE filler (kg) = kJ of the shot x PPCBlastScalar / ACF.HEPower. The blast radius and power are ACF's own for that filler.
-    PPCBlastScalar    = 0.1224, -- [18] (17: 1) 1 = the shot's kJ become HE at ACF's rate. 2 = twice the filler (a bigger blast). ACF's blast radius grows with the filler to the power 0.33, so 0.1224 makes the RADIUS HALF of what it was (0.1224 ^ 0.33 = 0.5: a 100 mm shot 350 -> 175 units, a 300 mm shot 797 -> 399). The shot costs the same energy; PPCPropDamageScalar below makes up for the weaker blast
-    PPCPropDamageScalar = 6400,  -- [20] ONLY for people and while PPCOwnDamage is off (props take the 20 model, PPCOwnDamage below). [18] (17: 20; 16.7: was 1) multiplier on the damage props (and people) take from the blast, on top of what ACF works out from the blast each one received. 640 = 8 x 20 (8 times what 17 did) x 4 (to make up for the smaller blast: ACF's blast penetration falls with the filler, so at the same distance a part behind armour takes about a quarter of the damage; with the x4 a part next to the blast takes what the 8 times blast of the old radius gave it, one farther out a little less). It is applied AFTER ACF has chosen who the blast reaches, so it never changes the blast RADIUS (that follows the HE filler: PPCBlastScalar) or who is in it; ACF's own loss maths does not see it either (a part that dies of it stops shielding the parts behind it)
-    PPCFragmentScalar = 0,      -- multiplier on the damage from the FRAGMENT part of ACF's HE explosion. 0 = none, a pure blast; 1 = as ACF's own HE rounds
+    PPCBlastScalar    = 0.13, -- [18] (17: 1) 1 = the shot's kJ become HE at ACF's rate. 2 = twice the filler (a bigger blast). ACF's blast radius grows with the filler to the power 0.33, so 0.1224 makes the RADIUS HALF of what it was (0.1224 ^ 0.33 = 0.5: a 100 mm shot 350 -> 175 units, a 300 mm shot 797 -> 399). The shot costs the same energy; PPCPropDamageScalar below makes up for the weaker blast
+    PPCPropDamageScalar = 1500,  -- [20] ONLY for people and while PPCOwnDamage is off (props take the 20 model, PPCOwnDamage below). [18] (17: 20; 16.7: was 1) multiplier on the damage props (and people) take from the blast, on top of what ACF works out from the blast each one received. 640 = 8 x 20 (8 times what 17 did) x 4 (to make up for the smaller blast: ACF's blast penetration falls with the filler, so at the same distance a part behind armour takes about a quarter of the damage; with the x4 a part next to the blast takes what the 8 times blast of the old radius gave it, one farther out a little less). It is applied AFTER ACF has chosen who the blast reaches, so it never changes the blast RADIUS (that follows the HE filler: PPCBlastScalar) or who is in it; ACF's own loss maths does not see it either (a part that dies of it stops shielding the parts behind it)
+    PPCFragmentScalar = 0.5,      -- multiplier on the damage from the FRAGMENT part of ACF's HE explosion. 0 = none, a pure blast; 1 = as ACF's own HE rounds
     PPCFragMassRatio  = 0.5,    -- the casing mass handed to ACF's explosion, as a multiple of the filler (the capacitor's explosion uses 0.5 too). Only matters while PPCFragmentScalar is above 0
-    PPCBlastBackoff   = 4,      -- units: the explosion happens this far in front of the surface the projectile hit (so it is not inside the plate)
+    PPCBlastBackoff   = 10,      -- units: the explosion happens this far in front of the surface the projectile hit (so it is not inside the plate)
 
     -- THE BLAST'S DAMAGE MODEL. [20] ACF's explosion still decides WHICH parts the blast reaches and which are blocked (line of sight, permissions, safezones, the shooter's contraption). Its damage numbers are
     -- replaced, part by part, by this (not for people, who keep the PPCPropDamageScalar path above):
@@ -696,7 +696,7 @@ table.Merge(ACFLazers.Config, {
     PPCOwnDamage      = true,   -- [20] true = the model below. false (or 0) = the 19 model for everything: ACF's damage x PPCPropDamageScalar
     PPCBlastHealthSmall = 2.2,  -- [20] S at the smallest PPC (PPCCaliberMin, 50 mm): the centre of the blast does this many times a part's base health (before F and A). 2.2: a part with no armour to speak of dies within about a quarter of the radius
     PPCBlastHealthBig = 4.4,    -- [20] ... and at the biggest (PPCCaliberMax, 300 mm), a straight line between (100 mm: 2.64). Chosen so a 20 mm part at 10% of the radius takes what 19 gave it (100 mm shot: about 16 points for a 3000 cm2 part; 300 mm shot: about 27)
-    PPCArmourInfluence = 0.25,  -- [20] 0..1: how much armour matters. A = (1 - this) + this x (min(1, blast penetration / armour))^2. 0 = armour is ignored (a 50 mm plate takes what a 1 mm plate takes), 1 = ACF's own law (the damage falls with the square of the armour). 0.25: the thickest armour takes 75% of the unarmoured damage. A PPC blast penetrates only 1 to 4 mm, so without this every real armour plate was almost immune
+    PPCArmourInfluence = 0,  -- [20] 0..1: how much armour matters. A = (1 - this) + this x (min(1, blast penetration / armour))^2. 0 = armour is ignored (a 50 mm plate takes what a 1 mm plate takes), 1 = ACF's own law (the damage falls with the square of the armour). 0.25: the thickest armour takes 75% of the unarmoured damage. A PPC blast penetrates only 1 to 4 mm, so without this every real armour plate was almost immune
     PPCFalloffBlend   = 1,      -- [20] 0..1: 1 = the inverse exponential below, 0 = a straight line 1 - x, in between = a mix of the two
     PPCFalloffRate    = 3,      -- [20] how sharp the inverse exponential is: F(x) = (e^(-rate x) - e^(-rate)) / (1 - e^(-rate)). 3: half the centre damage at about 20% of the radius, an eighth at 60%. Near 0 = it flattens into the straight line, 8 = nearly all the damage is next to the centre
     --   Damage in multiples of the part's base health at rate 3 (100 mm shot S 2.64, 300 mm shot S 4.4), armour factor 1 (times 0.75 for the thickest armour):
@@ -754,7 +754,7 @@ table.Merge(ACFLazers.Config, {
     PPCHeatPctSmall   = 67.8,   -- [CHANGED 27] (16.5: was 77) percent of its own limit (PPCHeatCapF) that ONE shot at PPCCurveStart (20 mm) adds to its heat: 100 = one shot takes it to its limit, 51 was the 100 mm value in 16.2. 0 = a PPC never heats itself
     PPCHeatPctBig     = 100,    -- [CHANGED 27] (16.5: was 77) ... and of the biggest (PPCCaliberMax), a straight line between (like HeatLazerSmall .. HeatLazerBig). The line through (100 mm, 77%) and (300 mm, 100%) gives 67.8 at 20 mm
     PPCHeatCapF       = 900,    -- degrees Fahrenheit. 100% of a PPC (the same 900 as your HeatLazerCapF, but its own knob so the two can be tuned apart)
-    PPCHeatDamage     = 4,      -- (20: times PPCHeatDamageMult or PPCHeatOverfireMult, below) percent of a PPC's MAX HEALTH lost per second when it is twice as hot as its limit (200%), growing with the square of how far over it is (like HeatLazerDamage). 0 = a PPC never hurts itself (no turbo either)
+    PPCHeatDamage     = 3,      -- (20: times PPCHeatDamageMult or PPCHeatOverfireMult, below) percent of a PPC's MAX HEALTH lost per second when it is twice as hot as its limit (200%), growing with the square of how far over it is (like HeatLazerDamage). 0 = a PPC never hurts itself (no turbo either)
     PPCHeatDamageMult = 0.25,   -- [20] multiplies the PPC's whole self-damage (PPCHeatDamage's over^2 law AND the turbo part) while it is over its limit and has NOT fired while over its limit. 0.25 = four times slower. 0 = it never hurts itself that way
     PPCHeatOverfireMult = 1,    -- [20] ... and this is the multiplier for PPCHeatOverfireSeconds after a shot that was released while the PPC was ALREADY over 100% of its limit (the heat before the shot's own heat counts). 1 = the full speed of 19
     PPCHeatOverfireSeconds = 5, -- [20] seconds the fast damage lasts after such a shot (every shot fired over the limit restarts it). 0 = firing over the limit never makes the damage faster
@@ -799,8 +799,8 @@ table.Merge(ACFLazers.Config, {
     FlameHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
     FlameMaxPerPlayer   = 40,     -- default for the server variable sbox_maxacf_flamers (how many flamethrowers one player may have). Only a DEFAULT: set the variable on the server
     FlameShotsPerSecond = 7,      -- projectiles per second while Fire is held
-    FlameFuelSmall      = 0.5,    -- litres of napalm per second at FlameCaliberMin (75 mm) ...
-    FlameFuelBig        = 3.5,    -- ... and at FlameCaliberMax (225 mm). 2 L/s at 150 mm is on the straight line between the two, as asked. Set this to 2 if 2 L/s was meant for the biggest
+    FlameFuelSmall      = 2,    -- litres of napalm per second at FlameCaliberMin (75 mm) ...
+    FlameFuelBig        = 10,    -- ... and at FlameCaliberMax (225 mm). 2 L/s at 150 mm is on the straight line between the two, as asked. Set this to 2 if 2 L/s was meant for the biggest
     FlameNapalmDensity  = 0.9,    -- [GUESS] kg per litre of napalm (petrol is 0.832): what a full napalm tank weighs
     FlameLifetime       = 1.5,      -- seconds. The projectile is deleted this long after the shot, whatever else is going on
     FlameSpeedSmall     = 50,     -- m/s at FlameCaliberMin ...

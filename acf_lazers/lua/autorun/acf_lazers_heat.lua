@@ -14,6 +14,8 @@
 -- 15.4 (search for [CHANGED 3]): radiators cool themselves HeatCoolMultRad times as fast as a prop, and a player sitting in a vehicle is not set on fire (HeatIgniteSeated).
 -- 16.6 (search for [CHANGED 4]): THE HEAT CHECKER. Heat.Describe (everything about one part's heat), Heat.Scan / ScanLines / ScanPrint (where the heat is around a point), the messages ACFLazers_HeatCheckQuery /
 --       Reply the Heat Checker tool uses, and the console command acf_lazers_heat_scan. Reads only: nothing here changes any heat.
+-- 22.2 (search for [CHANGED 5]): SEATS. Nothing of ours ever sets a chair (any vehicle seat) on fire (Heat.CanIgnite), and the damage our weapons do to a chair (heat, the lazer beam, the PPC blast) is the
+--       chair's alone: ACF's own vehicle damage also hurts the person sitting in it (15 times over, as a squishy), so a marked hit is handed to ACF's plain prop damage instead (Heat.SeatOf, Heat.MarkSpare).
 -- =========================================================================
 
 if not SERVER then return end
@@ -239,7 +241,7 @@ function Heat.Hurt(ent, hp)
 
     result:SetDamage(hp) -- ACF's own "custom damage" slot: Compute() returns exactly this
 
-    local info = Damage.Objects.DamageInfo(Heat.GetAttacker(ent), ent, DMG_BURN, pos, pos, 0)
+    local info = Heat.MarkSpare(Damage.Objects.DamageInfo(Heat.GetAttacker(ent), ent, DMG_BURN, pos, pos, 0)) -- [CHANGED 5] (22.2) a chair takes this, the person in it does not
     local ok, res = pcall(Damage.dealDamage, ent, result, info)
 
     if not ok then
@@ -253,6 +255,76 @@ function Heat.Hurt(ent, hp)
 
     return res, info
 end
+
+-- ===================== SEATS ===================== [CHANGED 5]
+-- (22.2) Two rules about chairs (every seat and vehicle: Entity:IsVehicle()), each with a switch in the config that is OPTIONAL (a config without it means "on"):
+--   SeatNoIgnite    (true)  nothing of ours ever sets a chair on fire: the lazer beam, the flamethrower and anything that asks Heat.CanIgnite. The chair still takes heat and ACF damage and melts;
+--                           the person in it is not lit while he sits (he is, once the chair is gone and he stands in the fire).
+--   SeatSparePlayer (true)  the damage our weapons do to a chair stays with the chair. ACF's own Damage.doVehicleDamage hands every hit on a vehicle to the driver first (as a squishy: damage x 15)
+--                           and then to the vehicle as a prop; our hits are marked (Heat.MarkSpare) and a marked hit on a chair goes to ACF's Damage.doPropDamage alone. A person SITTING in a chair that
+--                           ACF can hurt (Heat.SeatOf) is not touched by the flamethrower and not hit by the lazer beam either: the chair takes what he would have taken. Out of the chair he is a person again.
+-- The marked hit works through ONE instance method on the chair, ACF_OnDamage, put there the moment our mark is seen (the hook below, which ACF runs just before it looks for that method). Nothing
+-- of ACF is replaced, and a chair that already has its own ACF_OnDamage (another addon's) is left alone.
+
+local function SeatFlag(name)
+    return not (CFG and CFG[name] == false)
+end
+
+--- Is this a chair (a vehicle seat)?
+function Heat.IsSeat(ent)
+    return IsValid(ent) and ent.IsVehicle ~= nil and ent:IsVehicle() == true and not ent:IsPlayer()
+end
+
+--- May we set this on fire? False for a chair while SeatNoIgnite is on; true for everything else.
+function Heat.CanIgnite(ent)
+    if not SeatFlag("SeatNoIgnite") then return true end
+
+    return not Heat.IsSeat(ent)
+end
+
+--- The chair a person is SPARED by, or nil. Only a player who sits in a chair that ACF can damage (ACF.Check answers) and only while SeatSparePlayer is on: a seat ACF cannot hurt could never melt, and
+--- sparing the person in it would make him unkillable.
+function Heat.SeatOf(ply)
+    if not SeatFlag("SeatSparePlayer") then return nil end
+    if not (IsValid(ply) and ply.IsPlayer and ply:IsPlayer() and ply.InVehicle and ply:InVehicle()) then return nil end
+
+    local seat = ply:GetVehicle()
+
+    if not Heat.IsSeat(seat) then return nil end
+    if not (ACF and ACF.Check and ACF.Check(seat)) then return nil end
+
+    return seat
+end
+
+--- Marks a DamageInfo so that a chair it hits is damaged alone. Returns the info (so it can be written inline). With SeatSparePlayer off nothing is marked.
+function Heat.MarkSpare(info)
+    if info and SeatFlag("SeatSparePlayer") then info.ACFLazersSpareDriver = true end
+
+    return info
+end
+
+-- The chair's own ACF_OnDamage (what ACF's dealDamage does for a "Vehicle" is Damage.doVehicleDamage; this is that, except for a marked hit).
+local function SeatOnDamage(self, DmgResult, DmgInfo)
+    local Damage = ACF.Damage
+
+    if DmgInfo and DmgInfo.ACFLazersSpareDriver then return Damage.doPropDamage(self, DmgResult, DmgInfo) end
+
+    return Damage.doVehicleDamage(self, DmgResult, DmgInfo)
+end
+
+hook.Add("ACF_OnDamageEntity", "ACFLazers_SpareSeatDriver", function(Ent, DmgResult, DmgInfo)
+    if not (DmgInfo and DmgInfo.ACFLazersSpareDriver) then return end
+    if not Heat.IsSeat(Ent) or Ent.ACF_OnDamage ~= nil then return end
+
+    local Damage = ACF and ACF.Damage
+
+    if Damage and Damage.doPropDamage and Damage.doVehicleDamage then
+        Ent.ACF_OnDamage = SeatOnDamage
+    elseif not Heat.SeatWarned then
+        Heat.SeatWarned = true
+        ErrorNoHalt("[acf_lazers_heat] this ACF has no Damage.doVehicleDamage / doPropDamage: a person in a chair is still hurt by hits on the chair.\n")
+    end
+end)
 
 -- ===================== SWEEP =====================
 -- Every HeatSweepInterval seconds: forget what was removed, cool the rest, and forget what is back at room temperature.
