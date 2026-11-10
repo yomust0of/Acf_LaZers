@@ -4,7 +4,14 @@
 --           (same file in the game folder and on the server. The new lazer / capacitor / generator init.lua files REFUSE to load with the old config: they need the heat knobs and
 --            ACFLazers.HeatCool from this one, and the new file lua/autorun/acf_lazers_heat.lua)
 --
-
+-- CHANGES in this file (23.1). It is YOUR config (the 23:43 one, your values and their [YOUR VALUE, shipped N] markers kept) plus the changes of 23 and 23.1:
+--   * 23.1: ONE AMMO TYPE for the gauss rifle. The DART is the ammo in the box AND the projectile (the separate "Inert" type of 23 is gone: delete lua\acf\entities\ammo_types\lazers_inert.lua).
+--     It is a child of ACF's APFSDS dart now. New knobs: GaussDartScale (0.35: the rod's width as a fraction of the caliber), GaussDartRicochet (80), GaussDartLimitVel (1000). GaussDartDensityMult 1 is now
+--     ACF's tungsten (it was steel); new helper GetGaussDartDiameterCm; GetGaussPenetration asks the DART type (ACF's long-rod equation); the readout gets dartWidth; GaussInertID is gone.
+--   * 23: THE GAUSS RIFLE: the new knob block GaussModel ... GaussFirePitchBig, LinkClasses gets acf_gauss and acf_ammo, and the new helper section "GAUSS RIFLE HELPERS" at the end.
+--   * 23: the optional SeatNoIgnite / SeatSparePlayer / SeatPutOut / SeatFireGrace / SeatFireImmune / SeatFireRadius lines (new block "PEOPLE IN CHAIRS", after the gauss knobs). Missing = on, as before.
+--   Search this file for: GAUSS  or  PEOPLE IN CHAIRS  or  YOUR VALUE.
+--
 -- =========================================================================
 
 if SERVER then AddCSLuaFile() end
@@ -397,13 +404,13 @@ table.Merge(ACFLazers.Config, {
     FusionDamagedEfficiency = 0.5, -- the health efficiency at 0% health (1 at 100%, a straight line between)
     FusionChargeSeconds = 10,     -- [GUESS] the charge at 100% operating is this many seconds of the engine's full output, in kJ (6500 hp: 338,000 kJ = 42 kg of HE; 250 hp: 13,000 kJ = 1.6 kg)
     FusionChargeDrainSeconds = 60, -- [GUESS] seconds for a FULL charge to drain away when the operating percent is not holding it up
-    FusionBlastMult     = 5,      -- 1 = the charge becomes HE at ACF's rate (kJ / ACF.HEPower kg). Raise it for bigger bangs
+    FusionBlastMult     = 5,      -- [YOUR VALUE, shipped 1] 1 = the charge becomes HE at ACF's rate (kJ / ACF.HEPower kg). Raise it for bigger bangs
     FusionBlastMinKJ    = 0.1,    -- kJ. A floor so an engine with no charge still pops a tiny bit (never exactly 0), like the capacitor's CapReleaseMinKJ
     -- HUM [17]. A looping sound that follows the operating percent: silent at 0%, louder and higher in pitch as it climbs, so you can hear how hard the engine is working. A bigger engine (by FusionSizeCurve's size
     -- fraction, the same curve as its model) hums louder, deeper and carries farther. The sound is played from the SERVER, so everybody near hears it.
     FusionHumSound      = "ambient/machines/refrigerator.wav", -- [21] your pick (17 to 20: ambient/machines/power_transformer_loop_1.wav). [GUESS] that it loops by itself. "" = no hum. Other candidates: ambient/machines/power_transformer_loop_1.wav, ambient/machines/combine_shield_loop3.wav, ambient/energy/force_field_loop1.wav
-    FusionHumVolumeSmall = 1,   -- [GUESS] volume (0..1) at 100% operating for the smallest engine (it scales straight down with the operating percent)
-    FusionHumVolumeBig  = 3,      -- [GUESS] ... and for the biggest
+    FusionHumVolumeSmall = 1,   -- [YOUR VALUE, shipped 0.3] [GUESS] volume (0..1) at 100% operating for the smallest engine (it scales straight down with the operating percent)
+    FusionHumVolumeBig  = 3,      -- [YOUR VALUE, shipped 1] [GUESS] ... and for the biggest
     FusionHumPitchSmall = 125,    -- [GUESS] pitch (100 = the file as it is) at 100% operating for the smallest engine
     FusionHumPitchBig   = 70,     -- [GUESS] ... and for the biggest (deeper)
     FusionHumPitchIdle  = 0.5,    -- [GUESS] the pitch at 0% operating as a multiple of the pitch at 100% (a straight line between: it whines up as it spins up)
@@ -650,7 +657,7 @@ table.Merge(ACFLazers.Config, {
     PPCMassMin        = 255,    -- [CHANGED 30] (16.8: was 120; 16.7: was 60) kg at PPCCurveStart (20 mm; nothing is built at it). The smallest PPC you can build (50 mm) is 355 kg now (16.7: 222, 16.6: 163), 100 mm 969 (845, 790), 200 mm 3869 (3790, 3755), 300 mm 9000. An exact doubling of the 16.6 50 mm PPC (326 kg) would be 225
     PPCMassMax        = 9000,   -- kg at PPCCaliberMax
     PPCMassExponent   = 2,      -- bends the mass curve (bigger = small PPCs stay light for longer)
-    PPCArmourMult     = 1,    -- multiplier on the armour ACF would give (caliber x ACF.ArmorMod): half, like the lazer
+    PPCArmourMult     = 0.75,    -- [YOUR VALUE, shipped 0.5] multiplier on the armour ACF would give (caliber x ACF.ArmorMod): half, like the lazer
     PPCHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
 
     -- ENERGY PER SHOT, in kJ. The size curve: PPCEnergyCurve 0 = a straight line, 1 = fully exponential, in between = a mix (the same shape rule as LazerDrawCurve). Damage follows the energy: the more a shot
@@ -682,11 +689,11 @@ table.Merge(ACFLazers.Config, {
     PPCBallColorB     = 255,    -- [19] blue 0 to 255
 
     -- THE EXPLOSION. HE filler (kg) = kJ of the shot x PPCBlastScalar / ACF.HEPower. The blast radius and power are ACF's own for that filler.
-    PPCBlastScalar    = 0.13, -- [18] (17: 1) 1 = the shot's kJ become HE at ACF's rate. 2 = twice the filler (a bigger blast). ACF's blast radius grows with the filler to the power 0.33, so 0.1224 makes the RADIUS HALF of what it was (0.1224 ^ 0.33 = 0.5: a 100 mm shot 350 -> 175 units, a 300 mm shot 797 -> 399). The shot costs the same energy; PPCPropDamageScalar below makes up for the weaker blast
-    PPCPropDamageScalar = 1500,  -- [20] ONLY for people and while PPCOwnDamage is off (props take the 20 model, PPCOwnDamage below). [18] (17: 20; 16.7: was 1) multiplier on the damage props (and people) take from the blast, on top of what ACF works out from the blast each one received. 640 = 8 x 20 (8 times what 17 did) x 4 (to make up for the smaller blast: ACF's blast penetration falls with the filler, so at the same distance a part behind armour takes about a quarter of the damage; with the x4 a part next to the blast takes what the 8 times blast of the old radius gave it, one farther out a little less). It is applied AFTER ACF has chosen who the blast reaches, so it never changes the blast RADIUS (that follows the HE filler: PPCBlastScalar) or who is in it; ACF's own loss maths does not see it either (a part that dies of it stops shielding the parts behind it)
-    PPCFragmentScalar = 0.5,      -- multiplier on the damage from the FRAGMENT part of ACF's HE explosion. 0 = none, a pure blast; 1 = as ACF's own HE rounds
+    PPCBlastScalar    = 0.13, -- [YOUR VALUE, shipped 0.1224] [18] (17: 1) 1 = the shot's kJ become HE at ACF's rate. 2 = twice the filler (a bigger blast). ACF's blast radius grows with the filler to the power 0.33, so 0.1224 makes the RADIUS HALF of what it was (0.1224 ^ 0.33 = 0.5: a 100 mm shot 350 -> 175 units, a 300 mm shot 797 -> 399). The shot costs the same energy; PPCPropDamageScalar below makes up for the weaker blast
+    PPCPropDamageScalar = 1500,  -- [YOUR VALUE, shipped 640] [20] ONLY for people and while PPCOwnDamage is off (props take the 20 model, PPCOwnDamage below). [18] (17: 20; 16.7: was 1) multiplier on the damage props (and people) take from the blast, on top of what ACF works out from the blast each one received. 640 = 8 x 20 (8 times what 17 did) x 4 (to make up for the smaller blast: ACF's blast penetration falls with the filler, so at the same distance a part behind armour takes about a quarter of the damage; with the x4 a part next to the blast takes what the 8 times blast of the old radius gave it, one farther out a little less). It is applied AFTER ACF has chosen who the blast reaches, so it never changes the blast RADIUS (that follows the HE filler: PPCBlastScalar) or who is in it; ACF's own loss maths does not see it either (a part that dies of it stops shielding the parts behind it)
+    PPCFragmentScalar = 0.3,      -- [YOUR VALUE, shipped 0] multiplier on the damage from the FRAGMENT part of ACF's HE explosion. 0 = none, a pure blast; 1 = as ACF's own HE rounds
     PPCFragMassRatio  = 0.5,    -- the casing mass handed to ACF's explosion, as a multiple of the filler (the capacitor's explosion uses 0.5 too). Only matters while PPCFragmentScalar is above 0
-    PPCBlastBackoff   = 10,      -- units: the explosion happens this far in front of the surface the projectile hit (so it is not inside the plate)
+    PPCBlastBackoff   = 15,      -- [YOUR VALUE, shipped 4] units: the explosion happens this far in front of the surface the projectile hit (so it is not inside the plate)
 
     -- THE BLAST'S DAMAGE MODEL. [20] ACF's explosion still decides WHICH parts the blast reaches and which are blocked (line of sight, permissions, safezones, the shooter's contraption). Its damage numbers are
     -- replaced, part by part, by this (not for people, who keep the PPCPropDamageScalar path above):
@@ -696,7 +703,7 @@ table.Merge(ACFLazers.Config, {
     PPCOwnDamage      = true,   -- [20] true = the model below. false (or 0) = the 19 model for everything: ACF's damage x PPCPropDamageScalar
     PPCBlastHealthSmall = 2.2,  -- [20] S at the smallest PPC (PPCCaliberMin, 50 mm): the centre of the blast does this many times a part's base health (before F and A). 2.2: a part with no armour to speak of dies within about a quarter of the radius
     PPCBlastHealthBig = 4.4,    -- [20] ... and at the biggest (PPCCaliberMax, 300 mm), a straight line between (100 mm: 2.64). Chosen so a 20 mm part at 10% of the radius takes what 19 gave it (100 mm shot: about 16 points for a 3000 cm2 part; 300 mm shot: about 27)
-    PPCArmourInfluence = 0,  -- [20] 0..1: how much armour matters. A = (1 - this) + this x (min(1, blast penetration / armour))^2. 0 = armour is ignored (a 50 mm plate takes what a 1 mm plate takes), 1 = ACF's own law (the damage falls with the square of the armour). 0.25: the thickest armour takes 75% of the unarmoured damage. A PPC blast penetrates only 1 to 4 mm, so without this every real armour plate was almost immune
+    PPCArmourInfluence = 0,  -- [YOUR VALUE, shipped 0.25] [20] 0..1: how much armour matters. A = (1 - this) + this x (min(1, blast penetration / armour))^2. 0 = armour is ignored (a 50 mm plate takes what a 1 mm plate takes), 1 = ACF's own law (the damage falls with the square of the armour). 0.25: the thickest armour takes 75% of the unarmoured damage. A PPC blast penetrates only 1 to 4 mm, so without this every real armour plate was almost immune
     PPCFalloffBlend   = 1,      -- [20] 0..1: 1 = the inverse exponential below, 0 = a straight line 1 - x, in between = a mix of the two
     PPCFalloffRate    = 3,      -- [20] how sharp the inverse exponential is: F(x) = (e^(-rate x) - e^(-rate)) / (1 - e^(-rate)). 3: half the centre damage at about 20% of the radius, an eighth at 60%. Near 0 = it flattens into the straight line, 8 = nearly all the damage is next to the centre
     --   Damage in multiples of the part's base health at rate 3 (100 mm shot S 2.64, 300 mm shot S 4.4), armour factor 1 (times 0.75 for the thickest armour):
@@ -754,7 +761,7 @@ table.Merge(ACFLazers.Config, {
     PPCHeatPctSmall   = 67.8,   -- [CHANGED 27] (16.5: was 77) percent of its own limit (PPCHeatCapF) that ONE shot at PPCCurveStart (20 mm) adds to its heat: 100 = one shot takes it to its limit, 51 was the 100 mm value in 16.2. 0 = a PPC never heats itself
     PPCHeatPctBig     = 100,    -- [CHANGED 27] (16.5: was 77) ... and of the biggest (PPCCaliberMax), a straight line between (like HeatLazerSmall .. HeatLazerBig). The line through (100 mm, 77%) and (300 mm, 100%) gives 67.8 at 20 mm
     PPCHeatCapF       = 900,    -- degrees Fahrenheit. 100% of a PPC (the same 900 as your HeatLazerCapF, but its own knob so the two can be tuned apart)
-    PPCHeatDamage     = 3,      -- (20: times PPCHeatDamageMult or PPCHeatOverfireMult, below) percent of a PPC's MAX HEALTH lost per second when it is twice as hot as its limit (200%), growing with the square of how far over it is (like HeatLazerDamage). 0 = a PPC never hurts itself (no turbo either)
+    PPCHeatDamage     = 3,      -- [YOUR VALUE, shipped 4] (20: times PPCHeatDamageMult or PPCHeatOverfireMult, below) percent of a PPC's MAX HEALTH lost per second when it is twice as hot as its limit (200%), growing with the square of how far over it is (like HeatLazerDamage). 0 = a PPC never hurts itself (no turbo either)
     PPCHeatDamageMult = 0.25,   -- [20] multiplies the PPC's whole self-damage (PPCHeatDamage's over^2 law AND the turbo part) while it is over its limit and has NOT fired while over its limit. 0.25 = four times slower. 0 = it never hurts itself that way
     PPCHeatOverfireMult = 1,    -- [20] ... and this is the multiplier for PPCHeatOverfireSeconds after a shot that was released while the PPC was ALREADY over 100% of its limit (the heat before the shot's own heat counts). 1 = the full speed of 19
     PPCHeatOverfireSeconds = 5, -- [20] seconds the fast damage lasts after such a shot (every shot fired over the limit restarts it). 0 = firing over the limit never makes the damage faster
@@ -799,13 +806,13 @@ table.Merge(ACFLazers.Config, {
     FlameHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
     FlameMaxPerPlayer   = 40,     -- default for the server variable sbox_maxacf_flamers (how many flamethrowers one player may have). Only a DEFAULT: set the variable on the server
     FlameShotsPerSecond = 7,      -- projectiles per second while Fire is held
-    FlameFuelSmall      = 2,    -- litres of napalm per second at FlameCaliberMin (75 mm) ...
-    FlameFuelBig        = 10,    -- ... and at FlameCaliberMax (225 mm). 2 L/s at 150 mm is on the straight line between the two, as asked. Set this to 2 if 2 L/s was meant for the biggest
+    FlameFuelSmall      = 2,    -- [YOUR VALUE, shipped 0.5] litres of napalm per second at FlameCaliberMin (75 mm) ...
+    FlameFuelBig        = 10,    -- [YOUR VALUE, shipped 3.5] ... and at FlameCaliberMax (225 mm). 2 L/s at 150 mm is on the straight line between the two, as asked. Set this to 2 if 2 L/s was meant for the biggest
     FlameNapalmDensity  = 0.9,    -- [GUESS] kg per litre of napalm (petrol is 0.832): what a full napalm tank weighs
-    FlameLifetime       = 1.5,      -- seconds. The projectile is deleted this long after the shot, whatever else is going on
-    FlameSpeedSmall     = 50,     -- m/s at FlameCaliberMin ...
-    FlameSpeedBig       = 100,    -- ... and at FlameCaliberMax
-    FlameDragMult       = 200,     -- (22.1: 40, was 4 in 22) times the drag of an ordinary ACF shell of the same caliber (a steel shell FlameDragRefLength calibers long). 1 = an ordinary shell
+    FlameLifetime       = 1.5,      -- [YOUR VALUE, shipped 3] seconds. The projectile is deleted this long after the shot, whatever else is going on
+    FlameSpeedSmall     = 50,     -- [YOUR VALUE, shipped 80] m/s at FlameCaliberMin ...
+    FlameSpeedBig       = 100,    -- [YOUR VALUE, shipped 150] ... and at FlameCaliberMax
+    FlameDragMult       = 200,     -- [YOUR VALUE, shipped 40] (22.1: 40, was 4 in 22) times the drag of an ordinary ACF shell of the same caliber (a steel shell FlameDragRefLength calibers long). 1 = an ordinary shell
     FlameDragRefLength  = 4,      -- [GUESS] calibers. The length of the "ordinary shell" the drag is measured against (ACF's drag coefficient is 0.0001 / (steel density x length)): longer = less drag
     FlameGravityMult    = 1,      -- 1 = ACF's gravity (the flame falls like a shell), 0 = it flies straight
     FlameSphereStart    = 16,     -- units. The sphere's diameter when the projectile leaves the gun (the same at every size) ...
@@ -848,10 +855,58 @@ table.Merge(ACFLazers.Config, {
     FlameTrailColorR    = 255,    -- the sprites' colour (orange)
     FlameTrailColorG    = 150,
     FlameTrailColorB    = 60,
+    -- ===================== GAUSS RIFLE (23) =====================
+    -- The gauss rifle (entity acf_gauss, model GaussModel) shoots DART rounds (one ACF ammo type, lua/acf/entities/ammo_types/lazers_dart.lua, a child of ACF's APFSDS dart: ACF's long-rod penetration and ricochet rules):
+    -- a tungsten rod GaussDartLength calibers long, NO drop and NO drag (a straight line), at GaussSpeedSmall .. GaussSpeedBig m/s. It needs no power (yet); it uses ROUNDS from linked ammo boxes: ACF's own scalable
+    -- ammo crate holding the same DART type. A DART has nothing that can burn or blow up, so a box of them is inert: it never cooks off and never explodes, damaged or destroyed it just breaks like a plain prop.
+    -- "Small .. Big" = a straight line over the rifle's size, GaussCaliberMin .. GaussCaliberMax mm (the mass, the refire time, the sound pitch). The muzzle VELOCITY bends at the base size on purpose: the rifle
+    -- is GaussSpeedBase at GaussCaliberBase (2000 m/s at 100 mm, as asked), GaussSpeedSmall at the smallest (1400) and GaussSpeedBig at the biggest (2300), a straight line on each side of the base.
+    -- Every Gauss... knob is optional: the helper file below has a default for each (a test keeps the table there equal to this block).
+    GaussModel          = "models/lasers/gauss.mdl", -- the gauss rifle. If the file is missing it refuses to spawn and says so
+    GaussCaliberMin     = 30,     -- mm, the smallest gauss rifle (model scale 0.3)
+    GaussCaliberMax     = 300,    -- mm, the biggest (model scale 3)
+    GaussCaliberBase    = 100,    -- mm, the default size. The model is its normal size (scale 1) at this caliber: scale = caliber / GaussCaliberBase
+    GaussMuzzleX        = 37,     -- where the shot starts, in model units from the model's origin at scale 1 (x forward, y, z): multiplied by the scale
+    GaussMuzzleY        = 0,
+    GaussMuzzleZ        = 1,
+    GaussMassSmall      = 100,    -- [GUESS] kg at GaussCaliberMin, a straight line up to ...
+    GaussMassBig        = 6000,   -- [GUESS] ... kg at GaussCaliberMax
+    GaussArmourMult     = 0.5,    -- multiplier on the armour ACF would give (caliber x ACF.ArmorMod): half, like the lazer, the PPC and the flamethrower
+    GaussHealthMult     = 1,      -- multiplier on the health ACF works out from the surface area
+    GaussMaxPerPlayer   = 20,     -- default for the server variable sbox_maxacf_gausses (how many gauss rifles one player may have). Only a DEFAULT: set the variable on the server
+    GaussSpeedSmall     = 1400,   -- m/s at GaussCaliberMin ...
+    GaussSpeedBase      = 2000,   -- ... at GaussCaliberBase (the default size) ...
+    GaussSpeedBig       = 2300,   -- ... and at GaussCaliberMax. Two straight lines meet at the base (a single line from 1400 to 2300 would give only about 1633 m/s at 100 mm)
+    GaussRefireSmall    = 0.5,    -- [GUESS] seconds between two shots at GaussCaliberMin, a straight line up to ...
+    GaussRefireBig      = 3,      -- [GUESS] ... seconds at GaussCaliberMax
+    GaussAutoRepeat     = true,   -- true = holding Fire repeats the shot every refire time. false = one shot per press of Fire
+    GaussRoundsPerShot  = 1,      -- rounds taken from the ammo boxes by one shot
+    GaussLifetime       = 5,      -- seconds. The projectile is deleted this long after the shot, whatever else is going on (2000 m/s for 5 s is about 10 km: well past the edge of any map)
+    GaussDartLength     = 5,      -- [GUESS] calibers. The DART is a rod this long (50 cm at 100 mm). Its mass, and with it ACF's penetration, follow from the length, the width and the density below
+    GaussDartScale      = 0.35,   -- the rod is this fraction of the caliber wide (ACF's APFSDS: 0.35, so 35 mm at 100 mm). Thinner = longer for its weight = more penetration for the same speed
+    GaussDartRicochet   = 80,     -- degrees: the base ricochet angle (ACF's APFSDS: 80; a plain AP shell has 60). A dart bounces off only at a shallower angle than a shell does
+    GaussDartLimitVel   = 1000,   -- m/s: the speed it penetrates best at (ACF's APFSDS: 1000). The further the speed is from it, the sooner the dart ricochets. The ricochet angle shifts by (speed - this) / 100 degrees
+    GaussDartDensityMult = 1,     -- multiplier on the DART's mass. 1 = ACF's own APFSDS rod (tungsten, ACF.TungstenDensity), 0.41 = steel. ACF's penetration formula assumes tungsten whatever this says
+    GaussCrateMatchCaliber = true, -- true = a box only feeds a rifle of the SAME caliber (ACF's own rule for guns and crates). false = any DART box feeds any gauss rifle
+    GaussCrateDistance  = 0,      -- units. A box further than this from the rifle is unlinked by itself. 0 = ACF's own LinkDistance (650)
+    GaussFireSound      = "weapons/physcannon/superphys_launch1.wav", -- played at the muzzle at every shot. "" or false = silent
+    GaussFireVolume     = 1,      -- 0..1
+    GaussFireLevel      = 100,    -- sound level in decibels (how far it carries; 75 = a normal voice, 100 = a gunshot)
+    GaussFirePitchSmall = 130,    -- pitch of the smallest rifle (100 = the file as it is) ...
+    GaussFirePitchBig   = 70,     -- ... and of the biggest, a straight line between: a big one sounds deeper
+
+    -- ===================== PEOPLE IN CHAIRS (22.2 .. 22.5) =====================
+    -- Every line here is OPTIONAL: lua/autorun/acf_lazers_heat.lua reads a missing line as "on" (and 10 / 150 for the two numbers). They are written out so you can find them and switch them off.
+    SeatNoIgnite    = true,   -- true = nothing of ours sets a chair on fire (lazer beam, flamethrower), and the flamethrower never lights a person who sits in a vehicle. The chair still takes heat and ACF damage
+    SeatSparePlayer = true,   -- true = the damage our weapons do to a chair stays with the chair (a person sitting in it is not hurt through it, and the lazer beam / flamethrower skip him)
+    SeatPutOut      = true,   -- true = a person who burns while he sits in a vehicle is put out at once, but only while a fire of the FLAMETHROWER is alive
+    SeatFireGrace   = 10,     -- seconds. How long after a flamethrower fire's own seconds it still counts as alive for SeatPutOut
+    SeatFireImmune  = true,   -- true = a person in a vehicle is immune to BURNING PROPS (whoever lit them): the burn damage is blocked and he is put out
+    SeatFireRadius  = 150,    -- units. A seated person who burns while a burning thing (not a player) is this close is put out
     -- ===================== LINKING TOOLS =====================
     -- The things the link tools (right-click / shift / reload on the lazer, capacitor and generator tools) can select and link. ACF's own link system decides which PAIRS work:
-    --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor, PPC <-> capacitor, radiator <-> radiator (a pool), flamethrower <-> napalm fuel tank (22).
-    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine", acf_radiator = "radiator", acf_ppc = "PPC", acf_fusion = "fusion", acf_flamer = "flamethrower", acf_fueltank = "fuel tank" }, -- class -> the word used in chat messages [CHANGED 6] [CHANGED 22] [CHANGED 30]
+    --   engine <-> generator, generator <-> capacitor, capacitor <-> capacitor, lazer <-> capacitor, PPC <-> capacitor, radiator <-> radiator (a pool), flamethrower <-> napalm fuel tank (22), gauss rifle <-> inert ammo box (23; ACF's own ammo crate. A crate that is not inert is refused with a message).
+    LinkClasses = { acf_lazer = "lazer", acf_capacitor = "capacitor", acf_generator = "generator", acf_engine = "engine", acf_radiator = "radiator", acf_ppc = "PPC", acf_fusion = "fusion", acf_flamer = "flamethrower", acf_fueltank = "fuel tank", acf_gauss = "gauss rifle", acf_ammo = "ammo crate" }, -- class -> the word used in chat messages [CHANGED 6] [CHANGED 22] [CHANGED 30]
 
     -- ===================== WOBBLE: A DAMAGED LAZER LOSES ITS AIM =====================
     -- The lower a lazer's health, the more its beam drifts away from where it points. The drift is SMOOTH (it slowly wanders around, it never
@@ -3388,5 +3443,268 @@ function ACFLazers.GetFlameReadout(caliber)
         drag         = ACFLazers.GetFlameDragCoef(caliber),
         range        = sim.distance,                                 -- units flown level from 100 units up before the ground
         seconds      = sim.time,
+    }
+end
+
+-- ===================== GAUSS RIFLE HELPERS (pure maths: nothing here touches the game) ===================== [23]
+-- Every Gauss knob is optional: GaussNumber / GaussString / GaussFlag give the value in the config, or, when the config has none (or junk), the default written below. A test keeps this table equal to
+-- the knob block above, so there is ONE set of numbers to read.
+
+local GaussNumberDefaults = {
+    GaussCaliberMin = 30, GaussCaliberMax = 300, GaussCaliberBase = 100,
+    GaussMuzzleX = 37, GaussMuzzleY = 0, GaussMuzzleZ = 1,
+    GaussMassSmall = 100, GaussMassBig = 6000, GaussArmourMult = 0.5, GaussHealthMult = 1, GaussMaxPerPlayer = 20,
+    GaussSpeedSmall = 1400, GaussSpeedBase = 2000, GaussSpeedBig = 2300,
+    GaussRefireSmall = 0.5, GaussRefireBig = 3, GaussRoundsPerShot = 1, GaussLifetime = 5,
+    GaussDartLength = 5, GaussDartScale = 0.35, GaussDartRicochet = 80, GaussDartLimitVel = 1000, GaussDartDensityMult = 1, GaussCrateDistance = 0,
+    GaussFireVolume = 1, GaussFireLevel = 100, GaussFirePitchSmall = 130, GaussFirePitchBig = 70,
+}
+
+local GaussStringDefaults = { GaussModel = "models/lasers/gauss.mdl" }
+
+local GaussFlagDefaults = { GaussAutoRepeat = true, GaussCrateMatchCaliber = true }
+
+-- A sound knob is a text, or a list of texts (one picked at random); "" or false = none.
+local GaussSoundDefaults = {
+    GaussFireSound = "weapons/physcannon/superphys_launch1.wav",
+}
+
+ACFLazers.GaussNumberDefaults = GaussNumberDefaults
+ACFLazers.GaussStringDefaults = GaussStringDefaults
+ACFLazers.GaussFlagDefaults   = GaussFlagDefaults
+ACFLazers.GaussSoundDefaults  = GaussSoundDefaults
+
+-- The names the rifle and the DART use inside ACF (the files lua/acf/entities/weapons/lazers_gauss.lua and ammo_types/lazers_dart.lua register them).
+ACFLazers.GaussRegistry = "LazerWeapons" -- our own list of weapon classes (kept out of ACF's weapon menu on purpose; ACF still finds it through ACF.AddWeaponrySource)
+ACFLazers.GaussClassID  = "LazerGauss"   -- the weapon class inside it. An ACF ammo crate made for the rifle has this as its Weapon
+ACFLazers.GaussAmmoID   = "LazerDart"    -- the ammo type: the projectile the rifle fires AND what its ammo boxes hold
+
+--- A gauss rifle number: the config's, or the default when the config has no real number there.
+function ACFLazers.GaussNumber(name)
+    local v = tonumber(ACFLazers.Config[name])
+
+    if not v or v ~= v or v == math.huge or v == -math.huge then return GaussNumberDefaults[name] end
+
+    return v
+end
+
+--- A gauss rifle text (the model's path): the config's, or the default when the config has no text there.
+function ACFLazers.GaussString(name)
+    local v = ACFLazers.Config[name]
+
+    if type(v) == "string" then return v end
+
+    return GaussStringDefaults[name]
+end
+
+--- A gauss rifle on/off switch: true or a number of 1 or more is on, false or a smaller number is off, anything else is the default.
+function ACFLazers.GaussFlag(name)
+    local v = ACFLazers.Config[name]
+
+    if v == true then return true end
+    if v == false then return false end
+    if tonumber(v) then return tonumber(v) >= 1 end
+
+    return GaussFlagDefaults[name]
+end
+
+--- The sounds one knob may play, as a list of texts: the config's text or list (empty texts dropped); the default when the config has no text or list there; an empty list when the config says "" or false.
+function ACFLazers.GaussSoundList(name)
+    local v = ACFLazers.Config[name]
+
+    if v == false then return {} end
+    if type(v) ~= "string" and type(v) ~= "table" then v = GaussSoundDefaults[name] end
+
+    local out = {}
+
+    if type(v) == "string" then
+        if v ~= "" then out[1] = v end
+    elseif type(v) == "table" then
+        for _, s in ipairs(v) do
+            if type(s) == "string" and s ~= "" then out[#out + 1] = s end
+        end
+    end
+
+    return out
+end
+
+--- One sound of a knob, picked at random (nil = silent). `pick` is only for tests: pick(n) returns a whole number from 1 to n.
+function ACFLazers.PickGaussSound(name, pick)
+    local list = ACFLazers.GaussSoundList(name)
+
+    if #list == 0 then return nil end
+
+    local i = pick and pick(#list) or math.random(#list)
+
+    return list[math.Clamp(math.floor(tonumber(i) or 1), 1, #list)]
+end
+
+--- A caliber from a player (tool, dupe, console) held inside the gauss rifle range; junk becomes GaussCaliberBase.
+function ACFLazers.ClampGaussCaliber(caliber)
+    local low  = ACFLazers.GaussNumber("GaussCaliberMin")
+    local high = math.max(ACFLazers.GaussNumber("GaussCaliberMax"), low)
+
+    return ACFLazers.ClampNumber(caliber, ACFLazers.GaussNumber("GaussCaliberBase"), low, high)
+end
+
+--- 0 at the smallest gauss rifle ... 1 at the biggest. Every "Small .. Big" knob follows it.
+function ACFLazers.GetGaussSizeFraction(caliber)
+    local low  = ACFLazers.GaussNumber("GaussCaliberMin")
+    local high = ACFLazers.GaussNumber("GaussCaliberMax")
+
+    return math.Clamp(((tonumber(caliber) or low) - low) / math.max(high - low, 0.0001), 0, 1)
+end
+
+--- How big the model is for a caliber. 1.0 at GaussCaliberBase (0.3 at 30 mm, 3 at 300 mm with the shipped numbers).
+function ACFLazers.GetGaussScale(caliber)
+    return caliber / math.max(ACFLazers.GaussNumber("GaussCaliberBase"), 0.0001)
+end
+
+-- A "Small .. Big" pair of knobs, worked out for a caliber.
+local function GaussSize(caliber, small, big)
+    return Lerp(ACFLazers.GetGaussSizeFraction(caliber), ACFLazers.GaussNumber(small), ACFLazers.GaussNumber(big))
+end
+
+--- kg.
+function ACFLazers.GetGaussMass(caliber) return math.max(GaussSize(caliber, "GaussMassSmall", "GaussMassBig"), 1) end
+
+--- Seconds between two shots.
+function ACFLazers.GetGaussRefire(caliber) return math.max(GaussSize(caliber, "GaussRefireSmall", "GaussRefireBig"), 0.01) end
+
+--- Muzzle velocity in m/s: GaussSpeedSmall at the smallest rifle, GaussSpeedBase at GaussCaliberBase, GaussSpeedBig at the biggest; a straight line on each side of the base.
+function ACFLazers.GetGaussSpeed(caliber)
+    local low   = ACFLazers.GaussNumber("GaussCaliberMin")
+    local high  = math.max(ACFLazers.GaussNumber("GaussCaliberMax"), low)
+    local base  = math.Clamp(ACFLazers.GaussNumber("GaussCaliberBase"), low, high)
+    local c     = ACFLazers.ClampGaussCaliber(caliber)
+    local small = ACFLazers.GaussNumber("GaussSpeedSmall")
+    local mid   = ACFLazers.GaussNumber("GaussSpeedBase")
+    local big   = ACFLazers.GaussNumber("GaussSpeedBig")
+    local v
+
+    if c < base then
+        v = Lerp((c - low) / math.max(base - low, 0.0001), small, mid)
+    else
+        v = Lerp((c - base) / math.max(high - base, 0.0001), mid, big)
+    end
+
+    return math.max(v, 0)
+end
+
+--- Pitch (percent) of the shot's sound: GaussFirePitchSmall at the smallest rifle, GaussFirePitchBig at the biggest, a straight line between; held to what the engine takes (20 .. 255).
+function ACFLazers.GetGaussFirePitch(caliber)
+    return math.Clamp(GaussSize(caliber, "GaussFirePitchSmall", "GaussFirePitchBig"), 20, 255)
+end
+
+--- Where the shot starts, in model units from the origin of the model: the knobs (at scale 1) times the scale of this caliber. Returns x, y, z.
+function ACFLazers.GetGaussMuzzleOffset(caliber)
+    local s = ACFLazers.GetGaussScale(caliber)
+
+    return ACFLazers.GaussNumber("GaussMuzzleX") * s, ACFLazers.GaussNumber("GaussMuzzleY") * s, ACFLazers.GaussNumber("GaussMuzzleZ") * s
+end
+
+--- The DART's length in CENTIMETRES (what ACF's round maths calls the projectile length): GaussDartLength calibers, never under 1.5 calibers (ACF's own minimum) and never over 9.9 (the class allows 10).
+function ACFLazers.GetGaussDartLengthCm(caliber)
+    local calibers = math.Clamp(ACFLazers.GaussNumber("GaussDartLength"), 1.5, 9.9)
+
+    return calibers * math.max(tonumber(caliber) or 0, 1) / 10
+end
+
+--- The DART's width in CENTIMETRES: the caliber x GaussDartScale (ACF calls it the Diameter of the round; the Caliber is the gun's). Never under 0.05 of the caliber, never over the caliber.
+function ACFLazers.GetGaussDartDiameterCm(caliber)
+    local scale = math.Clamp(ACFLazers.GaussNumber("GaussDartScale"), 0.05, 1)
+
+    return scale * math.max(tonumber(caliber) or 0, 1) / 10
+end
+
+--- Kilograms one DART weighs: the area of the rod x the length x the density of ACF's APFSDS rod (tungsten, ACF.TungstenDensity in kg per cm^3) x GaussDartDensityMult.
+function ACFLazers.GetGaussDartMass(caliber)
+    local density = (ACF and tonumber(ACF.TungstenDensity)) or 19.25e-3 -- kg per cm^3 [SEEN acf/core/globals.lua:296]
+    local radius  = ACFLazers.GetGaussDartDiameterCm(caliber) / 2 -- cm
+
+    return math.pi * radius * radius * ACFLazers.GetGaussDartLengthCm(caliber) * density * math.max(ACFLazers.GaussNumber("GaussDartDensityMult"), 0.001)
+end
+
+--- Makes ACF's round data (what Ammo:ServerConvert builds from a weapon class) a DART round: no propellant, no filler, no sabot, no drag, weighing GetGaussDartMass worth (GaussDartDensityMult applied to ACF's
+--- own APFSDS rod mass). The rifle's shot and the box's rounds both go through it, so the box weighs what the rounds it holds weigh. A round takes the room of a full-caliber cylinder of its length in the
+--- box (ACF's APFSDS rod is a third of the caliber wide, but it rides in an armature: the box counts the armature). Returns the same table.
+function ACFLazers.GaussInertRound(Data)
+    if type(Data) ~= "table" then return Data end
+
+    local caliber = tonumber(Data.Caliber) or 0 -- cm, the gun's
+
+    Data.ProjMass   = (tonumber(Data.ProjMass) or 0) * math.max(ACFLazers.GaussNumber("GaussDartDensityMult"), 0.001)
+    Data.PropLength = 0
+    Data.PropMass   = 0
+    Data.FillerMass = 0
+    Data.CartMass   = Data.ProjMass
+    Data.DragCoef   = 0
+    Data.RoundVolume = math.pi * (caliber / 2) ^ 2 * (tonumber(Data.ProjLength) or 0)
+
+    return Data
+end
+
+--- The table ACF's ammo types turn into round data (Ammo:ServerConvert) for a gauss rifle of this caliber: the rifle's own class, no propellant, the DART's length, a tracer or not.
+function ACFLazers.GetGaussToolData(caliber, tracer)
+    caliber = ACFLazers.ClampGaussCaliber(caliber)
+
+    return {
+        Destiny    = ACFLazers.GaussRegistry,
+        Weapon     = ACFLazers.GaussClassID,
+        Caliber    = caliber,
+        AmmoType   = ACFLazers.GaussAmmoID,
+        AmmoStage  = 1,
+        Projectile = math.Round(ACFLazers.GetGaussDartLengthCm(caliber), 2),
+        Propellant = 0,
+        Tracer     = tracer and true or false,
+    }
+end
+
+--- Millimetres of steel plate one DART goes through at the muzzle, by ACF's own penetration formula for darts (the DART type's GetPenetration: the Lanz Odermatt long-rod equation). nil when ACF or the
+--- DART type is not there to ask.
+function ACFLazers.GetGaussPenetration(caliber)
+    local Types = ACF and ACF.Classes and ACF.Classes.AmmoTypes
+    local Dart  = Types and Types.Get and Types.Get(ACFLazers.GaussAmmoID)
+
+    if not (Dart and isfunction(Dart.GetPenetration)) then return nil end
+
+    local c = ACFLazers.ClampGaussCaliber(caliber)
+
+    return Dart:GetPenetration({
+        ProjLength = ACFLazers.GetGaussDartLengthCm(c),
+        Diameter   = ACFLazers.GetGaussDartDiameterCm(c),
+    }, ACFLazers.GetGaussSpeed(c))
+end
+
+--- How far from the rifle (units) a linked box may be: GaussCrateDistance, or ACF's LinkDistance (650) when that is 0.
+function ACFLazers.GetGaussCrateDistance()
+    local d = ACFLazers.GaussNumber("GaussCrateDistance")
+
+    if d > 0 then return d end
+
+    return (ACF and tonumber(ACF.LinkDistance)) or 650
+end
+
+--- Everything a player might want to know about a gauss rifle of this caliber, as numbers (the tool's readout and the hover text use it).
+function ACFLazers.GetGaussReadout(caliber)
+    local refire = ACFLazers.GetGaussRefire(caliber)
+    local speed  = ACFLazers.GetGaussSpeed(caliber)
+    local life   = ACFLazers.GaussNumber("GaussLifetime")
+
+    return {
+        caliber     = caliber,
+        scale       = ACFLazers.GetGaussScale(caliber),
+        mass        = ACFLazers.GetGaussMass(caliber),
+        speed       = speed,                                        -- m/s at the muzzle
+        refire      = refire,                                       -- seconds between shots
+        shots       = 1 / refire,                                   -- shots a second while Fire is held (with GaussAutoRepeat)
+        rounds      = math.max(math.floor(ACFLazers.GaussNumber("GaussRoundsPerShot") + 0.5), 1),
+        dartLength  = ACFLazers.GetGaussDartLengthCm(caliber),      -- cm
+        dartWidth   = ACFLazers.GetGaussDartDiameterCm(caliber),    -- cm
+        dartMass    = ACFLazers.GetGaussDartMass(caliber),          -- kg
+        penetration = ACFLazers.GetGaussPenetration(caliber),       -- mm of steel at the muzzle (nil without ACF)
+        lifetime    = life,
+        range       = speed * life,                                 -- metres flown before the projectile is deleted
+        energy      = 0.5 * ACFLazers.GetGaussDartMass(caliber) * speed * speed / 1000, -- kJ the DART carries
     }
 end

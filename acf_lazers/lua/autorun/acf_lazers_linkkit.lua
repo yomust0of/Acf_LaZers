@@ -2,6 +2,7 @@
 -- NEW (12), fixed in 12.1 (AddCSLuaFile). Goes to:  lua/autorun/acf_lazers_linkkit.lua
 -- 15.2: only the TEXTS changed (the messages and help lines now mention radiators); the code is the same. Which things the tools react to is the config's LinkClasses.
 -- 16: only the TEXTS changed again (they name PPCs); the code is the same.
+-- 23: the texts name gauss rifles and ammo crates, and "break every link" on an ammo crate lets go of the gauss rifles linked to it (the guns ACF made are never touched). Nothing else changed.
 --
 -- THE LINK KIT: the linking part of every tool of this addon, written ONCE. A tool file adds one line, after its own settings:
 --
@@ -67,6 +68,13 @@ function Kit.UnlinkAll(ent)
         end
     end
 
+    -- [23] an ammo crate lets go of its gauss rifles (the ACF guns linked to a crate are not ours to break)
+    if ent.Weapons and ent:GetClass() == "acf_ammo" then
+        for other in pairs(ent.Weapons) do
+            if IsValid(other) and other:GetClass() == "acf_gauss" and ACF.PerformClassUnlink(other, ent) then count = count + 1 end
+        end
+    end
+
     if ent.ACFGenerators then
         for gen in pairs(ent.ACFGenerators) do
             if IsValid(gen) and ACF.PerformClassUnlink(gen, ent) then count = count + 1 end
@@ -80,7 +88,7 @@ if CLIENT then
     -- The info lines and chat texts. `left` is that tool's own left-click line.
     function Kit.AddLanguage(mode, left)
         language.Add("tool." .. mode .. ".left", left)
-        language.Add("tool." .. mode .. ".right", "Link: click an engine, generator, capacitor, lazer, PPC, radiator, flamethrower or fuel tank first (it turns green), then click what to link everything green to (engine > generator > capacitor > lazer or PPC; radiator <-> radiator; flamethrower <-> napalm tank)")
+        language.Add("tool." .. mode .. ".right", "Link: click an engine, generator, capacitor, lazer, PPC, radiator, flamethrower, fuel tank, gauss rifle or ammo crate first (it turns green), then click what to link everything green to (engine > generator > capacitor > lazer or PPC; radiator <-> radiator; flamethrower <-> napalm tank; gauss rifle <-> inert ammo box)")
         language.Add("tool." .. mode .. ".right_shift", "(Hold Shift) Add another thing to the selection, or take a selected thing off it")
         language.Add("tool." .. mode .. ".reload", "Unlink: aim at the one to unlink the selected things from (nothing selected = break all links of what you aim at)")
         language.Add("tool." .. mode .. ".0", "Left-click: " .. left .. ".  Right-click: select / link.  Shift + right-click: select more.  Reload: unlink.")
@@ -303,7 +311,7 @@ function Kit.Install(TOOL, mode, left)
         if not Kit.IsLinkable(hit) then
             UnselectAll(self)
 
-            Say(ply, "Info", "Link: selection cleared. Aim at an engine, a generator, a capacitor, a lazer, a PPC, a radiator, a flamethrower or a fuel tank.")
+            Say(ply, "Info", "Link: selection cleared. Aim at an engine, a generator, a capacitor, a lazer, a PPC, a radiator, a flamethrower, a fuel tank, a gauss rifle or an ammo crate.")
 
             return false
         end
@@ -355,7 +363,7 @@ function Kit.Install(TOOL, mode, left)
         local hit = trace.Entity
 
         if not Kit.IsLinkable(hit) then
-            Say(ply, "Info", "Unlink: aim at an engine, a generator, a capacitor, a lazer, a PPC, a radiator, a flamethrower or a fuel tank.")
+            Say(ply, "Info", "Unlink: aim at an engine, a generator, a capacitor, a lazer, a PPC, a radiator, a flamethrower, a fuel tank, a gauss rifle or an ammo crate.")
 
             return false
         end
