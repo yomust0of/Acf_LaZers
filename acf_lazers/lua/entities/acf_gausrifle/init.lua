@@ -1,5 +1,5 @@
 -- =========================================================================
--- ACF GAUSS RIFLE: SERVER FILE  (23.2)
+-- ACF GAUSS RIFLE: SERVER FILE  (23.1)
 -- Goes to:  lua/entities/acf_gauss/init.lua       (the CLIENT file is cl_init.lua next to it: never put this file there)
 --           NEEDS the 23.1 config (lua/autorun/acf_lazers_config.lua: the Gauss knobs and helpers), the weapon class lua/acf/entities/weapons/lazers_gauss.lua and the ammo type
 --           lua/acf/entities/ammo_types/lazers_dart.lua: it refuses to load (and says why in the console) when the config is older.
@@ -17,21 +17,12 @@
 --     repeats the shot every refire time.
 --   * Tracer: a choice of the tool (the rifle keeps it and sends it with the DART; ACF draws the tracer).
 --   * A rifle in a safezone (marked by a safezone addon, or inside one of ACF's own zones) fires harmless darts: they fly and are drawn, and touch nothing.
---   * (23.2) WHEN THE RIFLE CANNOT BE CREATED it says why, in chat and in the server console, instead of ACF's bare "The spawn function for acf_gauss didn't return an entity.": the usual cause is that the
---     SERVER does not have the entity's three files (init.lua, shared.lua, cl_init.lua in lua/entities/acf_gauss/) under exactly those names; it also names a missing model and a reached limit.
 -- Not in yet (asked for later): the effects (muzzle, the gauss look of the DART), recoil, power from capacitors, other round types.
 -- =========================================================================
 
 AddCSLuaFile("cl_init.lua")
 AddCSLuaFile("shared.lua")
 include("shared.lua")
-
--- (23.2) Did shared.lua really run, and is this file where GMod must find it? If shared.lua is missing (or misnamed, for example shared.lua.new) include() only complains and this file goes on, but the
--- game then cannot create the entity: ents.Create gives nothing and ACF only says "didn't return an entity". These two answers are kept for the message MakeACFGauss gives.
-local SHARED_OK = isfunction(ENT.GetMuzzlePos) -- the LAST function shared.lua defines before its client part: a shared.lua that stopped half way fails this too
-local Source    = debug and debug.getinfo and debug.getinfo(1, "S")
-local LOADED_FROM = string.gsub(tostring(Source and Source.short_src or "?"), "\\", "/")
-local FOLDER_OK = LOADED_FROM == "?" or string.find(LOADED_FROM, "entities/acf_gauss/init.lua", 1, true) ~= nil
 
 local ACF         = ACF
 local Contraption = ACF.Contraption
@@ -50,16 +41,8 @@ if not (ACFLazers.GaussNumber and ACFLazers.GetGaussSpeed and ACFLazers.GetGauss
     return
 end
 
-local VERSION = "23.2"
+local VERSION = "23.1"
 MsgN("[acf_gauss] init.lua version " .. VERSION .. " loaded")
-
-if not SHARED_OK then
-    ErrorNoHalt("[acf_gauss] shared.lua did not run: it is missing or misnamed in lua/entities/acf_gauss/ on this server, or it has an error (look for a red line above this one). The rifle cannot be created until it is fixed.\n")
-end
-
-if not FOLDER_OK then
-    ErrorNoHalt("[acf_gauss] this init.lua was loaded from " .. LOADED_FROM .. " but it must be lua/entities/acf_gauss/init.lua (the folder name is the entity name). The rifle cannot be created until it is moved.\n")
-end
 
 local IDLE_THINK   = 0.5   -- seconds between Thinks while nobody holds Fire and the rifle is not cooling
 local READ_BUSY    = 0.25  -- seconds between ammo readouts while Fire is held
@@ -619,93 +602,19 @@ end
 
 if SERVER then
     -- Data is a table {Caliber = mm, Tracer = true / false}. Signature (Player, Pos, Angle, Data) is what Entities.Register wants.
-    -- (23.2) A refusal is told to the player (chat, one line each) and to the server console. Lines are kept short: the chat cuts long ones.
-    local function Refuse(ply, Lines)
-        for _, line in ipairs(Lines) do
-            ErrorNoHalt(line .. "\n")
-
-            if IsValid(ply) then ply:ChatPrint(line) end
-        end
-    end
-
-    -- (23.2) WHY ents.Create("acf_gauss") gave nothing: what this SERVER has in lua/entities/acf_gauss/ and what the game knows. The files are looked up on the server ("GAME" = everything it mounted).
-    local function WhyNoEntity()
-        local Dir   = "lua/entities/acf_gauss/"
-        local Lines = { "[acf_gauss] The server cannot create the entity acf_gauss (ents.Create gave nothing)." }
-        local Miss  = {}
-
-        for _, name in ipairs({ "init.lua", "shared.lua", "cl_init.lua" }) do
-            if not file.Exists(Dir .. name, "GAME") then Miss[#Miss + 1] = name end
-        end
-
-        if #Miss > 0 then
-            Lines[#Lines + 1] = "[acf_gauss] Missing ON THE SERVER in " .. Dir .. " : " .. table.concat(Miss, ", ") .. ". Each file must have exactly that name (no .new, no acf_gauss_ in front)."
-        end
-
-        if not SHARED_OK then
-            Lines[#Lines + 1] = "[acf_gauss] shared.lua did not run when init.lua loaded: it is missing, misnamed or has an error (see the red lines in the server console from the start)."
-        end
-
-        if not FOLDER_OK then
-            Lines[#Lines + 1] = "[acf_gauss] This init.lua was loaded from " .. LOADED_FROM .. " but it must be lua/entities/acf_gauss/init.lua."
-        end
-
-        local _, Folders = file.Find("lua/entities/*gauss*", "GAME")
-        local Others = {}
-
-        for _, name in ipairs(Folders or {}) do
-            if name ~= "acf_gauss" then Others[#Others + 1] = name end
-        end
-
-        if #Others > 0 then
-            Lines[#Lines + 1] = "[acf_gauss] Folders with gauss in the name: " .. table.concat(Others, ", ") .. " . The folder must be called acf_gauss."
-        end
-
-        if not (scripted_ents and scripted_ents.GetStored and scripted_ents.GetStored("acf_gauss")) then
-            Lines[#Lines + 1] = "[acf_gauss] The game does not know any scripted entity called acf_gauss."
-        end
-
-        if #Lines == 1 then
-            Lines[#Lines + 1] = "[acf_gauss] All three files are there. Restart the SERVER (not only the game) after copying, then look in the server console for red lines about acf_gauss."
-        end
-
-        return Lines
-    end
-
-    -- Data is a table {Caliber = mm, Tracer = true / false}. Signature (Player, Pos, Angle, Data) is what Entities.Register wants.
     function MakeACFGauss(ply, pos, angles, Data)
         if not istable(Data) then
             Data = { Caliber = Data }
         end
 
-        if IsValid(ply) and not ply:CheckLimit("acf_gausses") then
-            local Var = GetConVar and GetConVar("sbox_maxacf_gausses")
-
-            Refuse(ply, { "[acf_gauss] You have reached the limit of gauss rifles (the server variable sbox_maxacf_gausses is " .. (Var and Var:GetString() or "not set") .. ")." })
-
-            return nil
-        end
-
-        -- (23.2) Like the radiator: a model the SERVER does not have would make ACF's scalable base fail with a pile of errors, so say so instead.
-        local Model = ACFLazers.GaussString("GaussModel")
-
-        if not util.IsValidModel(Model) then
-            Refuse(ply, { "[acf_gauss] The model " .. Model .. " is missing on this server (GaussModel in acf_lazers_config.lua). Is it installed on the SERVER and is the file name spelled right?" })
-
-            return nil
-        end
+        if IsValid(ply) and not ply:CheckLimit("acf_gausses") then return nil end
 
         local ent = ents.Create("acf_gauss")
-
-        if not IsValid(ent) then
-            Refuse(ply, WhyNoEntity())
-
-            return nil
-        end
+        if not IsValid(ent) then return nil end
 
         -- ACF wants this table and a model BEFORE Spawn
         ent.ACF = {}
-        Contraption.SetModel(ent, Model)
+        Contraption.SetModel(ent, ACFLazers.GaussString("GaussModel"))
 
         ent:SetPos(pos)
         ent:SetAngles(angles)
@@ -716,12 +625,6 @@ if SERVER then
 
         -- Caliber, size, mass, health: all through the same function Update uses
         ent:ApplyData(Data)
-
-        if not IsValid(ent) then
-            Refuse(ply, { "[acf_gauss] The rifle removed itself while it was being built. Look in the server console for the error just above this line." })
-
-            return nil
-        end
 
         if IsValid(ply) then
             if ent.SetPlayer then ent:SetPlayer(ply) end
