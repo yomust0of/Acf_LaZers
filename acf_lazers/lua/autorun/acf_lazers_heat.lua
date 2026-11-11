@@ -22,6 +22,7 @@
 -- 22.5 (search for [CHANGED 6]): A PERSON IN A VEHICLE IS IMMUNE TO BURNING PROPS. A burning prop that clips into his hitbox (or stands right beside him) no longer hurts or lights him: the hook
 --       ACFLazers_SeatFireImmune blocks the engine's burn damage (EntityTakeDamage: DMG_BURN from an entityflame / a burning thing that is not him) and puts him out at once, and the safety net (Heat.SeatFireSweep)
 --       also puts out a seated person who burns while a burning prop is within SeatFireRadius (150) of him, whoever lit that prop (Heat.BurningPropNear). Switch: SeatFireImmune (true); radius: SeatFireRadius.
+-- 23.4: A SMALL ADDITION. Heat.Describe gives the gauss rifle an ownPct (the share of ITS OWN limit, GaussHeatCapF) like the lazer, the PPC and the capacitor, so the Heat Checker shows it. Nothing else changed.
 -- =========================================================================
 
 if not SERVER then return end
@@ -753,7 +754,7 @@ end
 
 Heat.Commas = Commas
 
---- Everything about one part's heat, as numbers: { class, mass, capacity (kJ per kelvin), kJ, riseK, degF, pctHot (a fraction), ownPct (a fraction of the part's OWN limit: lazer, PPC or capacitor; -1 for
+--- Everything about one part's heat, as numbers: { class, mass, capacity (kJ per kelvin), kJ, riseK, degF, pctHot (a fraction), ownPct (a fraction of the part's OWN limit: lazer, PPC, gauss rifle or capacitor; -1 for
 --- other parts), natural (kJ it loses by itself in the next second), radKJps (kJ per second the radiators took out of it in their last sweep), poolKJps (what the whole pool they belong to took),
 --- machine (does a scan count it as a machine) }. A part with no heat gives zeros.
 function Heat.Describe(ent)
@@ -773,6 +774,8 @@ function Heat.Describe(ent)
         d.ownPct = riseK / math.max(ACFLazers.GetHeatRiseLazer(), 1e-6)
     elseif class == "acf_ppc" and ACFLazers.GetPPCHeatRise then
         d.ownPct = riseK / math.max(ACFLazers.GetPPCHeatRise(), 1e-6)
+    elseif class == "acf_gauss" and ACFLazers.GetGaussHeatRise then
+        d.ownPct = riseK / math.max(ACFLazers.GetGaussHeatRise(), 1e-6)
     elseif class == "acf_capacitor" then
         d.ownPct = riseK / math.max(ACFLazers.GetHeatRiseCap(), 1e-6)
     end

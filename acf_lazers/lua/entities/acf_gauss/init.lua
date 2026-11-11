@@ -1,7 +1,7 @@
 -- =========================================================================
--- ACF GAUSS RIFLE: SERVER FILE  (23.3)
+-- ACF GAUSS RIFLE: SERVER FILE  (23.4)
 -- Goes to:  lua/entities/acf_gauss/init.lua       (the CLIENT file is cl_init.lua next to it: never put this file there)
---           NEEDS the 23.3 config (lua/autorun/acf_lazers_config.lua: the Gauss knobs and helpers), the weapon class lua/acf/entities/weapons/lazers_gauss.lua and the ammo type
+--           NEEDS the 23.4 config (lua/autorun/acf_lazers_config.lua: the Gauss knobs and helpers), the heat store lua/autorun/acf_lazers_heat.lua, the weapon class lua/acf/entities/weapons/lazers_gauss.lua and the ammo type
 --           lua/acf/entities/ammo_types/lazers_dart.lua: it refuses to load (and says why in the console) when the config is older.
 --
 -- THE GAUSS RIFLE. One shot = one DART.
@@ -22,7 +22,13 @@
 --   * A rifle in a safezone (marked by a safezone addon, or inside one of ACF's own zones) fires harmless darts: they fly and are drawn, and touch nothing.
 --   * (23.2) WHEN THE RIFLE CANNOT BE CREATED it says why, in chat and in the server console, instead of ACF's bare "The spawn function for acf_gauss didn't return an entity.": the usual cause is that the
 --     SERVER does not have the entity's three files (init.lua, shared.lua, cl_init.lua in lua/entities/acf_gauss/) under exactly those names; it also names a missing model and a reached limit.
--- Not in yet (asked for later): the effects (muzzle, the gauss look of the DART), recoil, heat, other round types.
+--   * (23.4) THE RIFLE'S OWN HEAT AND DAMAGE MODEL, the PPC's (acf_ppc/init.lua: GetHeatPct, AddShotHeat, HeatThink, TakeHeatDamage, HeatDeath), with the config's GaussHeat... numbers:
+--     every shot that is released adds GaussHeatPctSmall .. GaussHeatPctBig percent of the rifle's own limit (GaussHeatCapF) as heat, all at once (ACFLazers.GetGaussShotHeat); over 100% it loses health
+--     (checked every HeatCheckInterval): GaussHeatDamage x over^2 percent of its max health a second plus the lazers' turbo part, x GaussHeatDamageMult, or x GaussHeatOverfireMult for GaussHeatOverfireSeconds after a
+--     shot that was released while it was ALREADY over its limit; when that kills it, it explodes with chance GaussHeatExplodeChance (a GaussHeatExplosionMult share of a lazer's blast) if it fired within the last
+--     GaussHeatFiringSeconds (or Fire is held), else it just dies. Wire outputs HeatKJ / HeatF / HeatPct and the hover text (Temperature, Heat per shot, Overheated). Radiators cool it like any entity of their
+--     contraption: no link is needed. A shot that is not released (no round, no energy, ACF has no free slot) heats nothing.
+-- Not in yet (asked for later): the effects (muzzle, the gauss look of the DART), recoil, other round types.
 -- =========================================================================
 
 AddCSLuaFile("cl_init.lua")
@@ -39,6 +45,8 @@ local FOLDER_OK = LOADED_FROM == "?" or string.find(LOADED_FROM, "entities/acf_g
 local ACF         = ACF
 local Contraption = ACF.Contraption
 local Entities    = ACF.Classes.Entities
+local Damage      = ACF.Damage
+local Objects     = Damage.Objects
 
 local LASER_CONFIG = ACFLazers and ACFLazers.Config
 
@@ -53,7 +61,16 @@ if not (ACFLazers.GaussNumber and ACFLazers.GetGaussSpeed and ACFLazers.GetGauss
     return
 end
 
-local VERSION = "23.3"
+-- (23.4) the rifle's own heat: the heat store (lua/autorun/acf_lazers_heat.lua) and the 23.4 helpers of the config. Without them every shot would throw; say so once.
+if not (ACFLazers.Heat and ACFLazers.Heat.Add and ACFLazers.Heat.Hurt and ACFLazers.GetHeatCapacity and ACFLazers.GetHeatDamagePct and ACFLazers.GetGaussShotHeat and ACFLazers.GetGaussHeatRise and ACFLazers.GetGaussDeathFiller
+    and ACFLazers.GetGaussOverfireUntil and ACFLazers.GetGaussSelfDamageMult and ACFLazers.GetLazerExplosionFiller) then
+    ErrorNoHalt("[acf_gauss] the heat system or the 23.4 gauss helpers are missing: copy lua/autorun/acf_lazers_heat.lua and the 23.4 lua/autorun/acf_lazers_config.lua, then restart.\n")
+    return
+end
+
+local Heat = ACFLazers.Heat
+
+local VERSION = "23.4"
 MsgN("[acf_gauss] init.lua version " .. VERSION .. " loaded")
 
 if not SHARED_OK then
@@ -64,7 +81,9 @@ if not FOLDER_OK then
     ErrorNoHalt("[acf_gauss] this init.lua was loaded from " .. LOADED_FROM .. " but it must be lua/entities/acf_gauss/init.lua (the folder name is the entity name). The rifle cannot be created until it is moved.\n")
 end
 
-local IDLE_THINK   = 0.5   -- seconds between Thinks while nobody holds Fire and the rifle is not cooling
+local IDLE_THINK   = 0.5   -- seconds between Thinks while nobody holds Fire, the rifle is not cooling and it holds no heat
+local HEAT_THINK   = 0.05  -- (23.4) seconds between Thinks while it holds heat (the heat check itself waits for HeatCheckInterval)
+local READOUT_INTERVAL_DEFAULT = 0.1 -- (23.4) seconds between heat-readout refreshes (config: HeatOutputInterval; the lazer's default)
 local READ_BUSY    = 0.25  -- seconds between ammo readouts while Fire is held
 local READ_IDLE    = 1     -- seconds between ammo readouts when idle
 
@@ -101,6 +120,13 @@ function ENT:Initialize()
     self.NoPower        = false -- (23.3) true while Fire is held but the pool cannot pay for the shot
     self.LastEnergy     = 0     -- (23.3) the pool's energy at the last read (the "Energy" wire output)
     self.NextEnergyRead = 0     -- (23.3) CurTime() of the next read
+    self.HeatDying      = false -- (23.4) true once its heat has killed it (the death runs once)
+    self.NextHeatCheck  = 0     -- (23.4) CurTime() of the next heat check (HeatThink)
+    self.LastHeatCheck  = CurTime()
+    self.NextHeatRead   = 0     -- (23.4) CurTime() of the next heat-readout refresh (HeatReadout)
+    self.HeatShown      = true  -- (23.4) true until the readout has written the COLD state (the first refresh writes 0 kJ / room temperature / 0%, like the PPC's)
+    self.LastShotTime   = -1e9  -- (23.4) CurTime() of the last shot that was released (the explosion dice use it)
+    self.OverfireUntil  = -1e9  -- (23.4) CurTime() until which the self-damage is fast (a shot was released while it was over its limit)
 
     if WireLib then
         WireLib.CreateInputs(self, { "Fire" })
@@ -115,6 +141,9 @@ function ENT:Initialize()
             "Energy",      -- (23.3) kJ in the capacitor pool this rifle can draw from right now
             "Shots",       -- (23.3) how many shots the pool can pay for
             "NoPower",     -- (23.3) 1 while Fire is held but the pool cannot pay for the shot
+            "HeatKJ",      -- (23.4) kJ of heat above room temperature
+            "HeatF",       -- (23.4) degrees Fahrenheit
+            "HeatPct",     -- (23.4) percent of the rifle's limit (GaussHeatCapF): 100 = the limit, above it the rifle hurts itself
         })
     end
 
@@ -293,6 +322,116 @@ function ENT:TakeEnergy(amount)
     end
 
     return true
+end
+
+-- =====================  RIFLE HEAT  (23.4)  =====================
+-- The PPC's heat code (acf_ppc/init.lua: GetHeatPct, UpdateHeatOutputs, HeatReadout, AddShotHeat, HeatThink, TakeHeatDamage, HeatDeath) with the rifle's numbers, a copy on purpose. The heat itself lives in the heat
+-- store (lua/autorun/acf_lazers_heat.lua); this entity only ADDS to it (a shot), READS it (the percent, the readout) and acts on it (damage, death). Every number is in the config (GaussHeat...).
+
+-- How hot the rifle is as a fraction of its limit (GaussHeatCapF): 0 = room temperature, 1 = the limit, 2 = twice as far above room temperature as the limit.
+function ENT:GetHeatPct()
+    return Heat.GetPct(self, ACFLazers.GetGaussHeatRise())
+end
+
+-- kJ of heat one shot gives this rifle (a percent of its own limit, config GaussHeatPctSmall .. GaussHeatPctBig).
+function ENT:GetShotHeat()
+    return ACFLazers.GetGaussShotHeat(self:GetCaliber())
+end
+
+-- The three heat wire outputs: kJ above room temperature, degrees Fahrenheit, percent of the rifle's limit.
+function ENT:UpdateHeatOutputs()
+    if not WireLib then return end
+
+    WireLib.TriggerOutput(self, "HeatKJ", Heat.GetKJ(self))
+    WireLib.TriggerOutput(self, "HeatF", Heat.GetTempF(self))
+    WireLib.TriggerOutput(self, "HeatPct", self:GetHeatPct() * 100)
+end
+
+-- The heat READOUT (the three outputs and the hover text) has its own clock: every HeatOutputInterval while the rifle holds heat, and once more when it has cooled to room temperature (so the readout ends at 0).
+-- A rifle at room temperature that already shows 0 costs one table lookup per interval and nothing else. Called from Think.
+function ENT:HeatReadout(now)
+    if now < self.NextHeatRead then return end
+
+    self.NextHeatRead = now + math.max(tonumber(LASER_CONFIG.HeatOutputInterval) or READOUT_INTERVAL_DEFAULT, 0)
+
+    local hot = Heat.GetKJ(self) > 0
+
+    if not (hot or self.HeatShown) then return end
+
+    self.HeatShown = hot
+
+    self:UpdateHeatOutputs()
+    self:UpdateOverlay()
+end
+
+-- A shot was released and paid: it heats the rifle. The readout is refreshed on the next Think, and the rifle keeps thinking fast while it holds heat.
+function ENT:AddShotHeat(now)
+    self.LastShotTime  = now
+    self.OverfireUntil = ACFLazers.GetGaussOverfireUntil(now, self:GetHeatPct(), self.OverfireUntil) -- read BEFORE this shot's heat is added
+
+    local heat = self:GetShotHeat()
+
+    if heat > 0 then Heat.Add(self, heat) end
+
+    self.NextHeatRead = 0
+    self.HeatShown    = true
+end
+
+-- Did it fire lately? (Fire held, or a shot within GaussHeatFiringSeconds.) The explosion dice of its death use it.
+function ENT:IsFiring(now)
+    now = now or CurTime()
+
+    return self.WantFire or (now - self.LastShotTime) <= math.max(ACFLazers.GaussNumber("GaussHeatFiringSeconds"), 0)
+end
+
+-- Called from Think every tick; does its work every HeatCheckInterval seconds: the damage a rifle over its limit does to itself.
+function ENT:HeatThink(now)
+    if now < self.NextHeatCheck then return end
+
+    local dt = math.Clamp(now - self.LastHeatCheck, 0, LASER_CONFIG.HeatMaxDeltaTime) -- the cap: a lag spike must not become one huge burst of damage
+
+    self.LastHeatCheck = now
+    self.NextHeatCheck = now + LASER_CONFIG.HeatCheckInterval
+
+    local over = self:GetHeatPct() - 1
+
+    if over > 0 then self:TakeHeatDamage(over, dt) end
+end
+
+-- `over` = how far above its limit it is (0.5 = half again as hot as the limit); dt = seconds this check stands for. The loss is a share of its MAX health, through ACF's own damage call.
+function ENT:TakeHeatDamage(over, dt)
+    local acf = self.ACF
+
+    if not (acf and acf.MaxHealth and acf.MaxHealth > 0) then return end
+
+    local pctPerSecond = ACFLazers.GetHeatDamagePct(over, ACFLazers.GaussNumber("GaussHeatDamage")) * ACFLazers.GetGaussSelfDamageMult(CurTime(), self.OverfireUntil) -- x GaussHeatDamageMult, or x GaussHeatOverfireMult after a shot fired over the limit
+    local HitRes       = Heat.Hurt(self, acf.MaxHealth * pctPerSecond / 100 * dt)
+
+    if HitRes and HitRes.Kill then self:HeatDeath() end
+end
+
+-- Its own heat has killed it. A rifle that fired lately explodes with chance GaussHeatExplodeChance (GaussHeatExplosionMult of what a lazer of its size would blow up with); otherwise it just dies and the
+-- pieces fly. Once only.
+function ENT:HeatDeath()
+    if self.HeatDying then return end
+
+    self.HeatDying = true
+
+    local dmgInfo = Objects.DamageInfo(self:GetAttacker(), self)
+
+    if self:IsFiring() and math.random() < ACFLazers.GaussNumber("GaussHeatExplodeChance") then
+        local filler   = ACFLazers.GetGaussDeathFiller(self:GetCaliber())
+        local position = self:LocalToWorld(self:OBBCenter())
+
+        ACF.KillChildProps(self, position, filler)
+        Damage.createExplosion(position, filler, filler * 0.5, { self }, dmgInfo)
+        Damage.explosionEffect(position, nil, filler)
+
+        constraint.RemoveAll(self)
+        self:Remove()
+    else
+        ACF.APKill(self, VectorRand(), math.min(ACFLazers.GaussNumber("GaussHeatDeathDebrisPower"), LASER_CONFIG.MaxDebrisPower), dmgInfo)
+    end
 end
 
 -- =====================  AMMO  =====================
@@ -620,6 +759,7 @@ function ENT:TryShoot()
 
     self:TakeRounds(rounds)
     self:TakeEnergy(cost) -- (23.3) the paid shot: nothing is taken when it was not released
+    self:AddShotHeat(now) -- (23.4) the released shot heats the rifle itself
 
     self.PressPending = false
     self.NextShot     = now + ACFLazers.GetGaussRefire(self:GetCaliber())
@@ -658,11 +798,17 @@ function ENT:Think()
         self:UpdateOverlay()
     end
 
+    self:HeatThink(now) -- (23.4) the damage its own heat does to it
+
+    if not IsValid(self) then return end -- its own heat can destroy it
+
+    self:HeatReadout(now)
+
     self:RefreshAmmo(false)
     self:RefreshPower(false)
 
-    -- every tick while Fire is held or the rifle is cooling between shots; slowly when idle
-    self:NextThink(now + ((self.WantFire or now < self.NextShot) and 0 or IDLE_THINK))
+    -- every tick while Fire is held or the rifle is cooling between shots; fast (HEAT_THINK) while it holds heat, so the heat damage and the readout keep up; slowly when it is cold and idle
+    self:NextThink(now + ((self.WantFire or now < self.NextShot) and 0 or (self.HeatShown and HEAT_THINK or IDLE_THINK)))
 
     return true
 end
@@ -708,6 +854,21 @@ function ENT:ACF_UpdateOverlayState(State)
     local info = ACFLazers.GetGaussReadout(caliber)
 
     State:AddKeyValue("Caliber", string.format("%g mm", caliber))
+
+    -- (23.4) the heat, in Fahrenheit and as a share of the rifle's limit, and what one shot adds
+    local heatPct = self:GetHeatPct()
+
+    State:AddKeyValue("Temperature", string.format("%.0f F (%.0f%% of its limit)", Heat.GetTempF(self), heatPct * 100))
+    State:AddKeyValue("Heat per shot", string.format("%.0f kJ (%.0f%% of its limit)", info.heat, info.heatPct))
+
+    if heatPct > 1 then
+        if CurTime() < self.OverfireUntil then
+            State:AddError("Overheated: taking damage FAST (it fired while over its limit)")
+        else
+            State:AddError("Overheated: taking damage")
+        end
+    end
+
     State:AddKeyValue("Muzzle velocity", string.format("%.0f m/s", info.speed))
     State:AddKeyValue("Refire", string.format("%.2f s (%.2f shots a second)", info.refire, info.shots))
     State:AddKeyValue("DART", string.format("%.1f kg, %.0f cm long, %.0f mm wide", info.dartMass, info.dartLength, info.dartWidth * 10))

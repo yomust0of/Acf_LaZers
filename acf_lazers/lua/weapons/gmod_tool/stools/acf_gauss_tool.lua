@@ -1,5 +1,5 @@
 -- =========================================================================
--- NEW FILE (23, changed in 23.1 and 23.3).  Goes to:  lua/weapons/gmod_tool/stools/acf_gauss_tool.lua
+-- NEW FILE (23, changed in 23.1, 23.3 and 23.4).  Goes to:  lua/weapons/gmod_tool/stools/acf_gauss_tool.lua
 -- The GAUSS RIFLE spawner. One slider (the rifle's size, 30 to 300 mm = model scale 0.3 to 3) and a readout of what that size gives. (23.3: no tracer switch any more: the DART's tracer is always on.)
 --   Left-click            spawns a gauss rifle, or updates the one you are aiming at (its size).
 --   Shift + left-click    spawns an INERT AMMO BOX (ACF's own scalable ammo crate, same models and the same size sliders as the napalm tank of the flamethrower tool, holding the DART, the rifle's one ammo
@@ -7,7 +7,7 @@
 --                         unlinks the rifles that no longer fit). An ammo crate that holds anything else is never touched: it says so instead.
 --   The box's size is on the same settings page, under the rifle's. ACF fits whole rounds in a box, so a box can come out bigger than the sliders (a round of a big rifle is longer than the default box).
 --   Right-click, Shift + right-click and Reload (link / unlink) come from the shared link kit like every tool of this addon: link an inert box to the rifle.
--- Needs the 23.3 config (lua/autorun/acf_lazers_config.lua: the Gauss... knobs and helpers), the 23 link kit, the weapon class and the ammo type of the rifle (lua/acf/entities/weapons/lazers_gauss.lua and
+-- Needs the 23.4 config (lua/autorun/acf_lazers_config.lua: the Gauss... knobs and helpers), the 23 link kit, the weapon class and the ammo type of the rifle (lua/acf/entities/weapons/lazers_gauss.lua and
 -- lua/acf/entities/ammo_types/lazers_dart.lua) and entities/acf_gauss.
 -- =========================================================================
 
@@ -71,9 +71,11 @@ if CLIENT then
         local info = ACFLazers.GetGaussReadout(caliber)
         local pen  = info.penetration and string.format(" It goes through about %.0f mm of steel at the muzzle.", info.penetration) or ""
         local power = Config.RequireCapacitor and string.format(" A shot takes %.0f kJ from the capacitors linked to the rifle.", info.shotKJ) or " Shots are free (RequireCapacitor is off in the config)."
+        -- (23.4) what a shot does to the rifle itself (an older config has no heat numbers: no sentence)
+        local heat  = (info.heat and info.heatPct) and string.format(" Each shot heats the rifle by %.0f kJ (%.0f%% of its limit, before cooling); over 100%% it damages itself.", info.heat, info.heatPct) or ""
 
-        return string.format("A %g mm gauss rifle (model scale %.2f, %d kg): muzzle velocity %.0f m/s, one shot every %.2f s. The DART is %.0f cm long, %.0f mm wide and weighs %.1f kg, carries %.0f kJ.%s It flies straight (no drop) for %g s (%.1f km).%s",
-            caliber, info.scale, math.floor(info.mass + 0.5), info.speed, info.refire, info.dartLength, info.dartWidth * 10, info.dartMass, info.energy, pen, info.lifetime, info.range / 1000, power)
+        return string.format("A %g mm gauss rifle (model scale %.2f, %d kg): muzzle velocity %.0f m/s, one shot every %.2f s. The DART is %.0f cm long, %.0f mm wide and weighs %.1f kg, carries %.0f kJ.%s It flies straight (no drop) for %g s (%.1f km).%s%s",
+            caliber, info.scale, math.floor(info.mass + 0.5), info.speed, info.refire, info.dartLength, info.dartWidth * 10, info.dartMass, info.energy, pen, info.lifetime, info.range / 1000, power, heat)
     end
 
     local function BoxText(caliber)
@@ -130,7 +132,7 @@ if CLIENT then
         Refresh()
         timer.Simple(0, Refresh) -- once more after the sliders have read their saved values
 
-        panel:Help("Link an inert ammo box to the rifle with the right-click link controls of this tool (or any tool of this addon). A box must be inert and, by default, of the same size (caliber) as the rifle. Link a capacitor to the rifle the same way: it takes its shot energy from the capacitors linked to it, like a PPC. The tracer is always on. Fire the rifle with the Fire wire input.")
+        panel:Help("Link an inert ammo box to the rifle with the right-click link controls of this tool (or any tool of this addon). A box must be inert and, by default, of the same size (caliber) as the rifle. Link a capacitor to the rifle the same way: it takes its shot energy from the capacitors linked to it, like a PPC. The tracer is always on. Every shot also heats the rifle, like a PPC: a radiator in its contraption (no link) or time cools it, and over its limit it damages itself. Fire the rifle with the Fire wire input.")
     end
 end
 

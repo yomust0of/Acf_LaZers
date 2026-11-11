@@ -4,7 +4,11 @@
 --           (same file in the game folder and on the server. The new lazer / capacitor / generator init.lua files REFUSE to load with the old config: they need the heat knobs and
 --            ACFLazers.HeatCool from this one, and the new file lua/autorun/acf_lazers_heat.lua)
 --
--- CHANGES in this file (23.3). It is YOUR config (the 23:43 one, your values and their [YOUR VALUE, shipped N] markers kept) plus the changes of 23, 23.1 and 23.3:
+-- CHANGES in this file (23.4). It is YOUR config (the 23:43 one, your values and their [YOUR VALUE, shipped N] markers kept) plus the changes of 23, 23.1, 23.3 and 23.4:
+--   * 23.4: THE GAUSS RIFLE HAS THE PPC'S OWN HEAT AND DAMAGE MODEL (the gun hurting itself). New knobs GaussHeatPctSmall (68.95 at 30 mm), GaussHeatPctBig (100 at 300 mm), GaussHeatCapF (900), GaussHeatDamage,
+--     GaussHeatDamageMult, GaussHeatOverfireMult, GaussHeatOverfireSeconds, GaussHeatExplodeChance, GaussHeatExplosionMult, GaussHeatDeathDebrisPower, GaussHeatFiringSeconds: the PPCHeat... knobs, for the rifle.
+--     A 100 mm shot is 77% of the rifle's limit and a 300 mm shot exactly 100%, the PPC's numbers. GaussHeatDamage is YOUR PPCHeatDamage (3; shipped 4). New helpers GetGaussHeatRise, GetGaussHeatPct, GetGaussLimitKJ,
+--     GetGaussShotHeat, GetGaussDeathFiller, GetGaussOverfireUntil, GetGaussSelfDamageMult; the readout has heat, heatPct, limitKJ and deathFiller.
 --   * 23.3: THE GAUSS RIFLE TAKES ENERGY LIKE A PPC, AND ITS TRACER IS ALWAYS ON AND TWICE AS LONG. New knobs GaussEnergySmall (764 kJ at 30 mm), GaussEnergyBig (133,333 kJ at 300 mm), GaussEnergyCurve (0.75),
 --     GaussTracerLengthMult (2); a 100 mm shot costs 10,968 kJ, what a 100 mm PPC shot costs. New helpers GetGaussShotEnergy, GetGaussTracerMult, WrapGaussTracer; GetGaussToolData has no tracer choice any more;
 --     the readout has shotKJ. The global RequireCapacitor knob decides it for the rifle too (false = free shots).
@@ -903,6 +907,26 @@ table.Merge(ACFLazers.Config, {
     GaussFireLevel      = 100,    -- sound level in decibels (how far it carries; 75 = a normal voice, 100 = a gunshot)
     GaussFirePitchSmall = 130,    -- pitch of the smallest rifle (100 = the file as it is) ...
     GaussFirePitchBig   = 70,     -- ... and of the biggest, a straight line between: a big one sounds deeper
+    -- ===================== THE RIFLE'S OWN HEAT AND DAMAGE MODEL (23.4): the PPC's, copied ===================== (the gun hurting ITSELF; the heat a shot gives its TARGET does not exist: a DART makes none)
+    --   * every shot that is released adds GaussHeatPctSmall .. GaussHeatPctBig percent of the rifle's own limit as heat, all at once (a straight line over the size, GaussCaliberMin .. GaussCaliberMax); 100% = GaussHeatCapF
+    --   * the limit in kJ = its mass x HeatSpecificHeat x the rise to GaussHeatCapF. Nothing cools in the first second; radiators in its contraption (no link needed) and the air cool it, like a PPC
+    --   * over 100% it loses health (checked every HeatCheckInterval): GaussHeatDamage x over^2 percent of its max health a second, plus the lazers' TURBO damage past HeatTurboStartPct, x GaussHeatDamageMult normally
+    --     and x GaussHeatOverfireMult for GaussHeatOverfireSeconds after a shot that was released while it was ALREADY over its limit
+    --   * if that kills it: it explodes with chance GaussHeatExplodeChance when it fired within the last GaussHeatFiringSeconds (or Fire is held), with GaussHeatExplosionMult of the HE a lazer of its size dies with;
+    --     otherwise it just dies and the pieces fly (ACF.APKill)
+    --   * wire outputs HeatKJ / HeatF / HeatPct and the hover text say how hot it is. The shared lazer knobs apply as well: HeatCheckInterval, HeatMaxDeltaTime, HeatOutputInterval, HeatTurbo..., HeatCoolMultACF.
+    --   The shipped values are the PPC's: a 100 mm rifle shot is 77% of its limit and a 300 mm shot exactly 100%, so (as with a PPC) a second shot soon after the first puts it over the limit and it needs time or a radiator.
+    GaussHeatPctSmall   = 68.95,  -- percent of its own limit (GaussHeatCapF) that ONE shot of the smallest rifle (GaussCaliberMin) adds: 100 = one shot takes it to its limit. 68.95 is where the PPC's line (67.8 at 20 mm .. 100 at 300 mm) is at 30 mm. 0 = a rifle never heats itself
+    GaussHeatPctBig     = 100,    -- ... and of the biggest (GaussCaliberMax), a straight line between. The line gives 77% at 100 mm, the PPC's number
+    GaussHeatCapF       = 900,    -- degrees Fahrenheit. 100% of a rifle (the same 900 as the PPC's and the lazer's, but its own knob so they can be tuned apart)
+    GaussHeatDamage     = 3,      -- [YOUR PPC'S VALUE, shipped 4] (times GaussHeatDamageMult or GaussHeatOverfireMult, below) percent of the rifle's MAX HEALTH lost per second when it is twice as hot as its limit (200%), growing with the square of how far over it is. 0 = it never hurts itself
+    GaussHeatDamageMult = 0.25,   -- multiplies the rifle's whole self-damage (the over^2 law AND the turbo part) while it is over its limit and has NOT fired while over its limit. 0.25 = four times slower. 0 = it never hurts itself that way
+    GaussHeatOverfireMult = 1,    -- ... and this is the multiplier for GaussHeatOverfireSeconds after a shot that was released while the rifle was ALREADY over 100% of its limit (the heat before the shot's own heat counts)
+    GaussHeatOverfireSeconds = 5, -- seconds the fast damage lasts after such a shot (every shot fired over the limit restarts it). 0 = firing over the limit never makes the damage faster
+    GaussHeatExplodeChance = 0.8, -- 0..1. A rifle that dies of its own heat explodes with this chance when it fired recently (see GaussHeatFiringSeconds); otherwise it just dies. 0.8 = your HeatExplodeChance
+    GaussHeatExplosionMult = 1 / 3, -- the death explosion's HE filler = this x the filler a LAZER of the same size makes when it explodes (GetLazerExplosionFiller). 1/3 = a third of the kill effect, like the PPC
+    GaussHeatDeathDebrisPower = 20000, -- [GUESS] how hard the pieces fly when a rifle just dies of heat (the PPC's number; capped by MaxDebrisPower)
+    GaussHeatFiringSeconds = 5,   -- a rifle counts as "firing" (for the explosion dice) this many seconds after its last shot, and while Fire is held
 
     -- ===================== PEOPLE IN CHAIRS (22.2 .. 22.5) =====================
     -- Every line here is OPTIONAL: lua/autorun/acf_lazers_heat.lua reads a missing line as "on" (and 10 / 150 for the two numbers). They are written out so you can find them and switch them off.
@@ -3468,6 +3492,8 @@ local GaussNumberDefaults = {
     GaussDartLength = 5, GaussDartScale = 0.35, GaussDartRicochet = 80, GaussDartLimitVel = 1000, GaussDartDensityMult = 1, GaussCrateDistance = 0,
     GaussEnergySmall = 764, GaussEnergyBig = 400000 / 3, GaussEnergyCurve = 0.75, GaussTracerLengthMult = 2,
     GaussFireVolume = 1, GaussFireLevel = 100, GaussFirePitchSmall = 130, GaussFirePitchBig = 70,
+    GaussHeatPctSmall = 68.95, GaussHeatPctBig = 100, GaussHeatCapF = 900, GaussHeatDamage = 4, GaussHeatDamageMult = 0.25, GaussHeatOverfireMult = 1, GaussHeatOverfireSeconds = 5,
+    GaussHeatExplodeChance = 0.8, GaussHeatExplosionMult = 1 / 3, GaussHeatDeathDebrisPower = 20000, GaussHeatFiringSeconds = 5,
 }
 
 local GaussStringDefaults = { GaussModel = "models/lasers/gauss.mdl" }
@@ -3765,9 +3791,67 @@ function ACFLazers.GetGaussCrateDistance()
     return (ACF and tonumber(ACF.LinkDistance)) or 650
 end
 
+-- ---------------------------------------------------------------- THE RIFLE'S OWN HEAT (23.4): the PPC's helpers (GetPPCHeatRise ... GetPPCSelfDamageMult), with the rifle's knobs, size and mass
+
+--- The rifle's 100%, in kelvin above room temperature (its GaussHeatCapF).
+function ACFLazers.GetGaussHeatRise()
+    return ACFLazers.GetHeatRiseK(ACFLazers.GaussNumber("GaussHeatCapF"))
+end
+
+--- Percent of the rifle's OWN limit that one shot of this caliber adds to its heat: GaussHeatPctSmall at the smallest, GaussHeatPctBig at the biggest, a straight line between (never below 0).
+function ACFLazers.GetGaussHeatPct(caliber)
+    return math.max(Lerp(ACFLazers.GetGaussSizeFraction(caliber), ACFLazers.GaussNumber("GaussHeatPctSmall"), ACFLazers.GaussNumber("GaussHeatPctBig")), 0)
+end
+
+--- kJ of heat that is 100% of a rifle of this caliber: its mass x HeatSpecificHeat (its heat capacity, kJ per kelvin) x the rise to GaussHeatCapF.
+function ACFLazers.GetGaussLimitKJ(caliber)
+    return ACFLazers.GetHeatCapacity(ACFLazers.GetGaussMass(caliber)) * ACFLazers.GetGaussHeatRise()
+end
+
+--- kJ of heat one shot gives the rifle ITSELF: that percent of its limit.
+function ACFLazers.GetGaussShotHeat(caliber)
+    return ACFLazers.GetGaussHeatPct(caliber) / 100 * ACFLazers.GetGaussLimitKJ(caliber)
+end
+
+--- HE filler (kg) of the explosion of a rifle that dies of its heat while firing: GaussHeatExplosionMult x what the lazer of the same size makes (GetLazerExplosionFiller).
+function ACFLazers.GetGaussDeathFiller(caliber)
+    return ACFLazers.GetLazerExplosionFiller(caliber) * math.max(ACFLazers.GaussNumber("GaussHeatExplosionMult"), 0)
+end
+
+--- The time (a CurTime()) until which the rifle's self-damage is FAST: `old` normally; now + GaussHeatOverfireSeconds when a shot is released while the heat (read before the shot's own heat is added) is
+--- already over 100% (`heatPct` is a fraction: 1 = the limit), and never earlier than `old`. Junk in `now` changes nothing.
+function ACFLazers.GetGaussOverfireUntil(now, heatPct, old)
+    old = tonumber(old)
+
+    if not old or old ~= old then old = -1e9 end
+
+    now     = tonumber(now)
+    heatPct = tonumber(heatPct)
+
+    if not now or now ~= now or now == math.huge or now == -math.huge then return old end
+
+    if heatPct and heatPct > 1 then
+        return math.max(now + math.max(ACFLazers.GaussNumber("GaussHeatOverfireSeconds"), 0), old)
+    end
+
+    return old
+end
+
+--- The multiplier on a rifle's self-damage right now: GaussHeatOverfireMult while `now` is before `overfireUntil`, GaussHeatDamageMult otherwise. Never negative.
+function ACFLazers.GetGaussSelfDamageMult(now, overfireUntil)
+    now           = tonumber(now)
+    overfireUntil = tonumber(overfireUntil)
+
+    local fast = now and overfireUntil and now == now and overfireUntil == overfireUntil and now < overfireUntil
+
+    return math.max(ACFLazers.GaussNumber(fast and "GaussHeatOverfireMult" or "GaussHeatDamageMult"), 0)
+end
+
 --- Everything a player might want to know about a gauss rifle of this caliber, as numbers (the tool's readout and the hover text use it).
 function ACFLazers.GetGaussReadout(caliber)
-    local refire = ACFLazers.GetGaussRefire(caliber)
+    local refire   = ACFLazers.GetGaussRefire(caliber)
+    local shotHeat = ACFLazers.GetGaussShotHeat(caliber) -- (23.4)
+    local limitKJ  = ACFLazers.GetGaussLimitKJ(caliber)  -- (23.4) kJ of heat that is 100% of this rifle
     local speed  = ACFLazers.GetGaussSpeed(caliber)
     local life   = ACFLazers.GaussNumber("GaussLifetime")
 
@@ -3784,6 +3868,10 @@ function ACFLazers.GetGaussReadout(caliber)
         dartMass    = ACFLazers.GetGaussDartMass(caliber),          -- kg
         penetration = ACFLazers.GetGaussPenetration(caliber),       -- mm of steel at the muzzle (nil without ACF)
         shotKJ      = ACFLazers.GetGaussShotEnergy(caliber),        -- (23.3) kJ one shot takes from the capacitors
+        heat        = shotHeat,                                     -- (23.4) kJ of heat one shot gives the rifle itself
+        heatPct     = shotHeat / math.max(limitKJ, 1e-6) * 100,     -- (23.4) ... as a percent of its limit (before any cooling)
+        limitKJ     = limitKJ,                                      -- (23.4) kJ of heat that is 100% of this rifle
+        deathFiller = ACFLazers.GetGaussDeathFiller(caliber),       -- (23.4) kg of HE of its death explosion
         lifetime    = life,
         range       = speed * life,                                 -- metres flown before the projectile is deleted
         energy      = 0.5 * ACFLazers.GetGaussDartMass(caliber) * speed * speed / 1000, -- kJ the DART carries
