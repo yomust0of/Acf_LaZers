@@ -1,7 +1,7 @@
 -- =========================================================================
--- ACF GAUSS RIFLE: SERVER FILE  (23.1)
+-- ACF GAUSS RIFLE: SERVER FILE  (23.3)
 -- Goes to:  lua/entities/acf_gauss/init.lua       (the CLIENT file is cl_init.lua next to it: never put this file there)
---           NEEDS the 23.1 config (lua/autorun/acf_lazers_config.lua: the Gauss knobs and helpers), the weapon class lua/acf/entities/weapons/lazers_gauss.lua and the ammo type
+--           NEEDS the 23.3 config (lua/autorun/acf_lazers_config.lua: the Gauss knobs and helpers), the weapon class lua/acf/entities/weapons/lazers_gauss.lua and the ammo type
 --           lua/acf/entities/ammo_types/lazers_dart.lua: it refuses to load (and says why in the console) when the config is older.
 --
 -- THE GAUSS RIFLE. One shot = one DART.
@@ -13,16 +13,28 @@
 --   * The shot: one of ACF's own projectiles (ACF.Ballistics.CreateBullet) of the type DART (lua/acf/entities/ammo_types/lazers_dart.lua). It starts at the point the config names (GaussMuzzleX / Y / Z at
 --     scale 1, times the scale; shipped 37, 0, 1), looking along the model's forward, at GaussSpeedSmall .. GaussSpeedBig m/s (1400 at 30 mm, 2000 at 100, 2300 at 300) with NO drop and NO drag, and is
 --     deleted GaussLifetime seconds after the shot. The speed of the rifle's own contraption is added to it, as ACF guns do.
---   * Fire (wire): a shot is released when Fire goes from 0 to above 0 and the rifle is not cooling (GaussRefireSmall .. GaussRefireBig seconds) and there is a round. With GaussAutoRepeat on, holding Fire
---     repeats the shot every refire time.
---   * Tracer: a choice of the tool (the rifle keeps it and sends it with the DART; ACF draws the tracer).
+--   * Fire (wire): a shot is released when Fire goes from 0 to above 0 and the rifle is not cooling (GaussRefireSmall .. GaussRefireBig seconds) and there is a round and (23.3) the capacitors can pay the shot's
+--     energy. With GaussAutoRepeat on, holding Fire repeats the shot every refire time.
+--   * (23.3) ENERGY, like a PPC: a shot costs GetGaussShotEnergy kJ (GaussEnergySmall .. GaussEnergyBig, the PPC's curve; 10,968 kJ at 100 mm, what a 100 mm PPC shot costs), drawn all at once from the pool of the
+--     capacitors linked to the rifle (the same link tools; the pool rules are the PPC's, a copy on purpose). The global knob RequireCapacitor (false = free shots) decides for the rifle too. Nothing is paid when the shot
+--     is not released. Wire outputs ShotKJ, Energy, Shots and NoPower, and the hover text, say how the power stands.
+--   * (23.3) The tracer is ALWAYS ON (the rifle keeps Tracer = true whatever a tool, a dupe or an update says); the clients draw the streak GaussTracerLengthMult times as long (lazers_dart.lua).
 --   * A rifle in a safezone (marked by a safezone addon, or inside one of ACF's own zones) fires harmless darts: they fly and are drawn, and touch nothing.
--- Not in yet (asked for later): the effects (muzzle, the gauss look of the DART), recoil, power from capacitors, other round types.
+--   * (23.2) WHEN THE RIFLE CANNOT BE CREATED it says why, in chat and in the server console, instead of ACF's bare "The spawn function for acf_gauss didn't return an entity.": the usual cause is that the
+--     SERVER does not have the entity's three files (init.lua, shared.lua, cl_init.lua in lua/entities/acf_gauss/) under exactly those names; it also names a missing model and a reached limit.
+-- Not in yet (asked for later): the effects (muzzle, the gauss look of the DART), recoil, heat, other round types.
 -- =========================================================================
 
 AddCSLuaFile("cl_init.lua")
 AddCSLuaFile("shared.lua")
 include("shared.lua")
+
+-- (23.2) Did shared.lua really run, and is this file where GMod must find it? If shared.lua is missing (or misnamed, for example shared.lua.new) include() only complains and this file goes on, but the
+-- game then cannot create the entity: ents.Create gives nothing and ACF only says "didn't return an entity". These two answers are kept for the message MakeACFGauss gives.
+local SHARED_OK = isfunction(ENT.GetMuzzlePos) -- the LAST function shared.lua defines before its client part: a shared.lua that stopped half way fails this too
+local Source    = debug and debug.getinfo and debug.getinfo(1, "S")
+local LOADED_FROM = string.gsub(tostring(Source and Source.short_src or "?"), "\\", "/")
+local FOLDER_OK = LOADED_FROM == "?" or string.find(LOADED_FROM, "entities/acf_gauss/init.lua", 1, true) ~= nil
 
 local ACF         = ACF
 local Contraption = ACF.Contraption
@@ -36,13 +48,21 @@ if not LASER_CONFIG then
 end
 
 if not (ACFLazers.GaussNumber and ACFLazers.GetGaussSpeed and ACFLazers.GetGaussMuzzleOffset and ACFLazers.GetGaussReadout and ACFLazers.GetGaussToolData and ACFLazers.GaussInertRound
-    and ACFLazers.IsProtectedBySafezone and ACFLazers.DescribeSafezone and ACFLazers.PickGaussSound and ACFLazers.GetGaussRefire and ACFLazers.GaussAmmoID and ACFLazers.GetGaussDartDiameterCm) then
+    and ACFLazers.IsProtectedBySafezone and ACFLazers.DescribeSafezone and ACFLazers.PickGaussSound and ACFLazers.GetGaussRefire and ACFLazers.GaussAmmoID and ACFLazers.GetGaussDartDiameterCm and ACFLazers.GetGaussShotEnergy and ACFLazers.GetCapGroup and ACFLazers.WaterFill) then
     ErrorNoHalt("[acf_gauss] the gauss rifle helpers are missing: lua/autorun/acf_lazers_config.lua is older than this init.lua. Copy the new config as well, then restart.\n")
     return
 end
 
-local VERSION = "23.1"
+local VERSION = "23.3"
 MsgN("[acf_gauss] init.lua version " .. VERSION .. " loaded")
+
+if not SHARED_OK then
+    ErrorNoHalt("[acf_gauss] shared.lua did not run: it is missing or misnamed in lua/entities/acf_gauss/ on this server, or it has an error (look for a red line above this one). The rifle cannot be created until it is fixed.\n")
+end
+
+if not FOLDER_OK then
+    ErrorNoHalt("[acf_gauss] this init.lua was loaded from " .. LOADED_FROM .. " but it must be lua/entities/acf_gauss/init.lua (the folder name is the entity name). The rifle cannot be created until it is moved.\n")
+end
 
 local IDLE_THINK   = 0.5   -- seconds between Thinks while nobody holds Fire and the rifle is not cooling
 local READ_BUSY    = 0.25  -- seconds between ammo readouts while Fire is held
@@ -60,9 +80,7 @@ cleanup.Register("acf_gausses")
 local function VerifyData(Data)
     Data.Caliber = math.Round(ACFLazers.ClampGaussCaliber(Data.Caliber), 2)
 
-    local Tracer = Data.Tracer
-
-    Data.Tracer = Tracer == true or (tonumber(Tracer) or 0) >= 1
+    Data.Tracer = true -- (23.3) the DART's tracer is always on: whatever a tool, a dupe or an update says (23.2 and before: a choice)
 end
 
 function ENT:Initialize()
@@ -76,7 +94,13 @@ function ENT:Initialize()
     self.NextRead       = 0     -- CurTime() of the next ammo readout
     self.ReadyShown     = nil   -- the last value written to the "Ready" output
     self.CoolingShown   = false -- the hover text has said "Cooling": it is refreshed once more when the cooling ends
-    self.DartData       = nil   -- ACF's round data of the DART this rifle fires (built on the first shot, forgotten when the caliber or the tracer changes)
+    self.DartData       = nil   -- ACF's round data of the DART this rifle fires (built on the first shot, forgotten when the caliber changes)
+    self.Caps           = {}    -- (23.3) the capacitors linked to this rifle (a set: key = capacitor). Filled and emptied by the link functions at the bottom
+    self.Pool           = {}    -- (23.3) the capacitor group this rifle draws from (rebuilt when ACFLazers.LinkVersion changes)
+    self.PoolVersion    = nil
+    self.NoPower        = false -- (23.3) true while Fire is held but the pool cannot pay for the shot
+    self.LastEnergy     = 0     -- (23.3) the pool's energy at the last read (the "Energy" wire output)
+    self.NextEnergyRead = 0     -- (23.3) CurTime() of the next read
 
     if WireLib then
         WireLib.CreateInputs(self, { "Fire" })
@@ -87,6 +111,10 @@ function ENT:Initialize()
             "Ammo",        -- rounds the linked boxes can give right now
             "Ready",       -- 1 = a shot would be released now if Fire went up (not cooling, there is a round)
             "NoAmmo",      -- 1 while Fire is held but there is no round to fire
+            "ShotKJ",      -- (23.3) kJ one shot costs
+            "Energy",      -- (23.3) kJ in the capacitor pool this rifle can draw from right now
+            "Shots",       -- (23.3) how many shots the pool can pay for
+            "NoPower",     -- (23.3) 1 while Fire is held but the pool cannot pay for the shot
         })
     end
 
@@ -112,7 +140,7 @@ function ENT:ApplyCaliber(caliber)
     self:UpdateWireOutputs()
 end
 
--- ACF's round data for the DART this rifle fires: the DART type's ServerConvert of the rifle's own tool data (class, caliber, length, no propellant, the tracer choice). Built once and kept; nil (with
+-- ACF's round data for the DART this rifle fires: the DART type's ServerConvert of the rifle's own tool data (class, caliber, length, no propellant, always a tracer). Built once and kept; nil (with
 -- self.DartError saying why) when ACF cannot build it, for example when one of the DART's files is missing.
 function ENT:GetDartData()
     if self.DartData then return self.DartData end
@@ -125,7 +153,7 @@ function ENT:GetDartData()
         return nil
     end
 
-    local Ok, Data = pcall(Dart.ServerConvert, Dart, ACFLazers.GetGaussToolData(self:GetCaliber(), self.Tracer))
+    local Ok, Data = pcall(Dart.ServerConvert, Dart, ACFLazers.GetGaussToolData(self:GetCaliber()))
 
     if not Ok or type(Data) ~= "table" or not (tonumber(Data.ProjMass) and Data.ProjMass > 0) then
         self.DartError = "ACF could not build the DART round" .. (Ok and " (is lua/acf/entities/weapons/lazers_gauss.lua installed?)" or (": " .. tostring(Data)))
@@ -154,7 +182,7 @@ function ENT:NetworkBolt()
     self:SetNW2Float("FlightLife", ACFLazers.GaussNumber("GaussLifetime"))
 end
 
--- Apply a whole Data table {Caliber = mm, Tracer = true / false}. Used by spawn AND by update, so both behave the same.
+-- Apply a whole Data table {Caliber = mm} (a Tracer field is accepted and ignored: the tracer is always on). Used by spawn AND by update, so both behave the same.
 -- self.Caliber and self.Tracer are plain fields on purpose: the duplicator saves entity fields, and Entities.Register (bottom of this file) lists the names, so a paste can rebuild the rifle.
 function ENT:ApplyData(Data)
     VerifyData(Data)
@@ -189,6 +217,82 @@ function ENT:ACF_Activate(Recalc)
     SelfACF.Armour    = Armour * (0.5 + Percent * 0.5)
     SelfACF.MaxArmour = Armour
     SelfACF.Type      = "Prop"
+end
+
+-- =====================  POWER  (23.3)  =====================
+-- The same pool rules as the PPC (acf_ppc/init.lua: GetPool, GetPoolEnergy, GetPoolCapacity, TakeEnergy): the capacitors linked to this rifle and every capacitor grouped with them, paid with
+-- ACFLazers.WaterFill. A copy on purpose, so the PPC and lazer files stay as they are; if the rules ever change, change all three (or move them to one shared place).
+
+function ENT:GetPool()
+    local version = ACFLazers.LinkVersion
+
+    if self.PoolVersion ~= version then
+        self.Pool        = ACFLazers.GetCapGroup(self.Caps)
+        self.PoolVersion = version
+    end
+
+    return self.Pool
+end
+
+-- kJ in the pool right now.
+function ENT:GetPoolEnergy()
+    local total = 0
+
+    for _, cap in ipairs(self:GetPool()) do
+        if IsValid(cap) and not cap.Exploding then total = total + cap.Charge end
+    end
+
+    return total
+end
+
+-- kJ the pool holds when every capacitor in it is full.
+function ENT:GetPoolCapacity()
+    local total = 0
+
+    for _, cap in ipairs(self:GetPool()) do
+        if IsValid(cap) and not cap.Exploding then total = total + cap.Capacity end
+    end
+
+    return total
+end
+
+-- kJ one shot costs.
+function ENT:GetShotEnergy()
+    return ACFLazers.GetGaussShotEnergy(self:GetCaliber())
+end
+
+-- Can the pool pay `amount` kJ right now? Always yes if RequireCapacitor is off.
+function ENT:CanAfford(amount)
+    if not LASER_CONFIG.RequireCapacitor or amount <= 0 then return true end
+
+    return self:GetPoolEnergy() + 1e-9 >= amount
+end
+
+-- Pay `amount` kJ out of the pool, or pay nothing and return false if the pool holds less. Every capacitor gives the same share (ACFLazers.WaterFill); one that cannot give a full share gives
+-- all it has and the others cover what it was short. The whole pool is stamped as drained, so the chargers pause for a moment (the capacitor's IsBeingDrained).
+function ENT:TakeEnergy(amount)
+    if not LASER_CONFIG.RequireCapacitor or amount <= 0 then return true end
+
+    local pool, limits, total = self:GetPool(), {}, 0
+
+    for i, cap in ipairs(pool) do
+        local charge = (IsValid(cap) and not cap.Exploding) and cap.Charge or 0
+
+        limits[i] = charge
+        total     = total + charge
+    end
+
+    if total + 1e-9 < amount then return false end
+
+    local takes = ACFLazers.WaterFill(limits, amount)
+    local now   = CurTime()
+
+    for i, cap in ipairs(pool) do
+        if takes[i] > 0 and IsValid(cap) then cap:RemoveCharge(takes[i]) end
+        if IsValid(cap) then cap.LastDrainTime = now end
+    end
+
+    return true
 end
 
 -- =====================  AMMO  =====================
@@ -323,14 +427,21 @@ function ENT:UpdateWireOutputs()
     WireLib.TriggerOutput(self, "Refire", ACFLazers.GetGaussRefire(caliber))
     WireLib.TriggerOutput(self, "Ammo", self.LastAmmo or 0)
     WireLib.TriggerOutput(self, "NoAmmo", self.NoAmmo and 1 or 0)
+
+    local cost = self:GetShotEnergy()
+
+    WireLib.TriggerOutput(self, "ShotKJ", cost)
+    WireLib.TriggerOutput(self, "Energy", self.LastEnergy or 0)
+    WireLib.TriggerOutput(self, "Shots", (cost > 0 and LASER_CONFIG.RequireCapacitor) and math.floor((self.LastEnergy or 0) / cost + 1e-9) or 0)
+    WireLib.TriggerOutput(self, "NoPower", self.NoPower and 1 or 0)
     self:UpdateReadyOutput()
 end
 
--- "Ready" follows the cooling and the ammo; it is only written when it changes.
+-- "Ready" follows the cooling, the ammo and (23.3) the power; it is only written when it changes.
 function ENT:UpdateReadyOutput()
     if not WireLib then return end
 
-    local ready = (CurTime() >= self.NextShot and (self.LastAmmo or 0) >= self:GetRoundsPerShot()) and 1 or 0
+    local ready = (CurTime() >= self.NextShot and (self.LastAmmo or 0) >= self:GetRoundsPerShot() and self:CanAfford(self:GetShotEnergy())) and 1 or 0
 
     if ready ~= self.ReadyShown then
         self.ReadyShown = ready
@@ -380,6 +491,42 @@ function ENT:ExplainNoAmmo()
     if next(self.Crates) then return end
 
     self:Notify("noammo", "This gauss rifle has no ammo box linked, so it cannot fire. Link one with the link controls of the gauss tool (right-click the rifle, then right-click the box). Make an inert box with Shift + left-click.", tonumber(LASER_CONFIG.NoCapacitorNoticeInterval) or 30)
+end
+
+-- Remind the owner in chat that a rifle with Fire held has NO capacitor linked (at most once per NoCapacitorNoticeInterval, 30 s). Nothing is said when capacitors are linked but empty: the hover text says that.
+function ENT:ExplainNoPower()
+    if not LASER_CONFIG.RequireCapacitor then return end
+    if next(self.Caps) then return end
+
+    self:Notify("nopower", "This gauss rifle has no capacitor linked, so it cannot fire. Link one with the link controls of the gauss tool (right-click the rifle, then right-click a capacitor).", tonumber(LASER_CONFIG.NoCapacitorNoticeInterval) or 30)
+end
+
+-- Called every Think and whenever Fire or a link changes (23.3). Keeps NoPower right, reads the pool (every LazerEnergyReadInterval seconds while the rifle is in use, once a second when idle; force = do it now)
+-- and refreshes the Energy / Shots outputs and the hover text when the energy changed.
+function ENT:RefreshPower(force)
+    local now     = CurTime()
+    local noPower = (self.WantFire and now >= self.NextShot and not self:CanAfford(self:GetShotEnergy())) and true or false
+
+    if noPower ~= self.NoPower then
+        self.NoPower = noPower
+        force        = true
+    end
+
+    if noPower then self:ExplainNoPower() end
+
+    if not force and now < self.NextEnergyRead then return end
+
+    self.NextEnergyRead = now + ((self.WantFire or now < self.NextShot) and (tonumber(LASER_CONFIG.LazerEnergyReadInterval) or 0.25) or 1)
+
+    local energy  = self:GetPoolEnergy()
+    local changed = energy ~= self.LastEnergy
+
+    self.LastEnergy = energy
+
+    if changed or force then
+        self:UpdateWireOutputs()
+        self:UpdateOverlay()
+    end
 end
 
 -- =====================  THE SHOT  =====================
@@ -465,18 +612,21 @@ function ENT:TryShoot()
     if not (self.PressPending or ACFLazers.GaussFlag("GaussAutoRepeat")) then return false end
 
     local rounds = self:GetRoundsPerShot()
+    local cost   = self:GetShotEnergy()
 
     if self:GetAmmo() < rounds then return false end -- a dud: RefreshAmmo reports it
+    if not self:CanAfford(cost) then return false end -- a dud: RefreshPower reports it (23.3)
     if not self:Shoot() then return false end
 
     self:TakeRounds(rounds)
+    self:TakeEnergy(cost) -- (23.3) the paid shot: nothing is taken when it was not released
 
     self.PressPending = false
     self.NextShot     = now + ACFLazers.GetGaussRefire(self:GetCaliber())
     self.CoolingShown = true
 
     self:RefreshAmmo(true)
-    self:UpdateOverlay()
+    self:RefreshPower(true) -- (also refreshes the hover text)
 
     return true
 end
@@ -494,6 +644,7 @@ function ENT:TriggerInput(iname, value)
 
     self:TryShoot()
     self:RefreshAmmo(true)
+    self:RefreshPower(true)
 end
 
 function ENT:Think()
@@ -508,6 +659,7 @@ function ENT:Think()
     end
 
     self:RefreshAmmo(false)
+    self:RefreshPower(false)
 
     -- every tick while Fire is held or the rifle is cooling between shots; slowly when idle
     self:NextThink(now + ((self.WantFire or now < self.NextShot) and 0 or IDLE_THINK))
@@ -522,15 +674,35 @@ function ENT:ACF_UpdateOverlayState(State)
     local rounds  = self:GetRoundsPerShot()
     local ammo    = self.LastAmmo or 0
 
+    local cost = self:GetShotEnergy()
+
     if now < self.NextShot then
         self.CoolingShown = true
         State:AddWarning(string.format("Cooling: %.1f s", self.NextShot - now))
-    elseif ammo >= rounds then
-        State:AddSuccess("Ready to fire")
-    elseif not next(self.Crates) then
-        State:AddError("Cannot fire: no ammo box linked")
     else
-        State:AddError("Cannot fire: the linked boxes are empty")
+        local missing = false
+
+        if ammo < rounds then
+            missing = true
+
+            if not next(self.Crates) then
+                State:AddError("Cannot fire: no ammo box linked")
+            else
+                State:AddError("Cannot fire: the linked boxes are empty")
+            end
+        end
+
+        if not self:CanAfford(cost) then
+            missing = true
+
+            if not next(self.Caps) then
+                State:AddError("Cannot fire: no capacitor linked")
+            else
+                State:AddError(string.format("Cannot fire: needs %.0f kJ in the capacitors for a shot", cost))
+            end
+        end
+
+        if not missing then State:AddSuccess("Ready to fire") end
     end
 
     local info = ACFLazers.GetGaussReadout(caliber)
@@ -544,7 +716,7 @@ function ENT:ACF_UpdateOverlayState(State)
         State:AddKeyValue("Penetration", string.format("%.0f mm at the muzzle", info.penetration))
     end
 
-    State:AddKeyValue("Tracer", self.Tracer and "yes" or "no")
+    State:AddKeyValue("Tracer", "always on")
 
     local capacity = self:GetCapacity()
 
@@ -559,6 +731,27 @@ function ENT:ACF_UpdateOverlayState(State)
     for _ in pairs(self.Crates) do linked = linked + 1 end
 
     State:AddKeyValue("Ammo boxes", string.format("%d linked (%d round%s a shot)", linked, rounds, rounds == 1 and "" or "s"))
+
+    -- (23.3) the power, like the PPC's hover text
+    if LASER_CONFIG.RequireCapacitor then
+        local poolCapacity = self:GetPoolCapacity()
+        local energy       = self:GetPoolEnergy()
+
+        if poolCapacity > 0 then
+            State:AddProgressBar("Energy available", math.Round(energy, 1), math.Round(poolCapacity, 1), " kJ")
+        else
+            State:AddKeyValue("Energy available", "0 kJ")
+        end
+
+        local caps = 0
+
+        for _ in pairs(self.Caps) do caps = caps + 1 end
+
+        State:AddKeyValue("Capacitors", string.format("%d linked (%d in the group)", caps, #self:GetPool()))
+        State:AddKeyValue("Energy per shot", string.format("%.0f kJ (%d shots in the pool)", cost, math.floor(energy / math.max(cost, 1e-6) + 1e-9)))
+    else
+        State:AddKeyValue("Power", "free (RequireCapacitor is off in the config)")
+    end
 end
 
 function ENT:PhysgunPickup(ply) return true end
@@ -574,6 +767,13 @@ function ENT:OnRemove()
             if Crate.UpdateOverlay then Crate:UpdateOverlay(true) end
         end
     end
+
+    -- (23.3) forget the capacitors, and make them forget us
+    for cap in pairs(self.Caps or {}) do
+        if IsValid(cap) and cap.Lazers then cap.Lazers[self] = nil end
+    end
+
+    ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1
 end
 
 -- Click-to-update. Entities.Update calls this. Same shape as the lazer's: wrap the change in SaveEntity/RestoreEntity so welds and the frozen state survive the rescale. A box that no longer fits
@@ -596,25 +796,100 @@ function ENT:Update(Data)
     end
 
     self:RefreshAmmo(true)
+    self:RefreshPower(true) -- (23.3) the shot costs another energy at the new size
 
     return true, "Gauss rifle updated successfully!" .. (Dropped > 0 and string.format(" %d ammo box(es) no longer fit and were unlinked.", Dropped) or "")
 end
 
 if SERVER then
-    -- Data is a table {Caliber = mm, Tracer = true / false}. Signature (Player, Pos, Angle, Data) is what Entities.Register wants.
+    -- Data is a table {Caliber = mm} (a Tracer field is accepted and ignored: the tracer is always on). Signature (Player, Pos, Angle, Data) is what Entities.Register wants.
+    -- (23.2) A refusal is told to the player (chat, one line each) and to the server console. Lines are kept short: the chat cuts long ones.
+    local function Refuse(ply, Lines)
+        for _, line in ipairs(Lines) do
+            ErrorNoHalt(line .. "\n")
+
+            if IsValid(ply) then ply:ChatPrint(line) end
+        end
+    end
+
+    -- (23.2) WHY ents.Create("acf_gauss") gave nothing: what this SERVER has in lua/entities/acf_gauss/ and what the game knows. The files are looked up on the server ("GAME" = everything it mounted).
+    local function WhyNoEntity()
+        local Dir   = "lua/entities/acf_gauss/"
+        local Lines = { "[acf_gauss] The server cannot create the entity acf_gauss (ents.Create gave nothing)." }
+        local Miss  = {}
+
+        for _, name in ipairs({ "init.lua", "shared.lua", "cl_init.lua" }) do
+            if not file.Exists(Dir .. name, "GAME") then Miss[#Miss + 1] = name end
+        end
+
+        if #Miss > 0 then
+            Lines[#Lines + 1] = "[acf_gauss] Missing ON THE SERVER in " .. Dir .. " : " .. table.concat(Miss, ", ") .. ". Each file must have exactly that name (no .new, no acf_gauss_ in front)."
+        end
+
+        if not SHARED_OK then
+            Lines[#Lines + 1] = "[acf_gauss] shared.lua did not run when init.lua loaded: it is missing, misnamed or has an error (see the red lines in the server console from the start)."
+        end
+
+        if not FOLDER_OK then
+            Lines[#Lines + 1] = "[acf_gauss] This init.lua was loaded from " .. LOADED_FROM .. " but it must be lua/entities/acf_gauss/init.lua."
+        end
+
+        local _, Folders = file.Find("lua/entities/*gauss*", "GAME")
+        local Others = {}
+
+        for _, name in ipairs(Folders or {}) do
+            if name ~= "acf_gauss" then Others[#Others + 1] = name end
+        end
+
+        if #Others > 0 then
+            Lines[#Lines + 1] = "[acf_gauss] Folders with gauss in the name: " .. table.concat(Others, ", ") .. " . The folder must be called acf_gauss."
+        end
+
+        if not (scripted_ents and scripted_ents.GetStored and scripted_ents.GetStored("acf_gauss")) then
+            Lines[#Lines + 1] = "[acf_gauss] The game does not know any scripted entity called acf_gauss."
+        end
+
+        if #Lines == 1 then
+            Lines[#Lines + 1] = "[acf_gauss] All three files are there. Restart the SERVER (not only the game) after copying, then look in the server console for red lines about acf_gauss."
+        end
+
+        return Lines
+    end
+
+    -- Data is a table {Caliber = mm} (a Tracer field is accepted and ignored: the tracer is always on). Signature (Player, Pos, Angle, Data) is what Entities.Register wants.
     function MakeACFGauss(ply, pos, angles, Data)
         if not istable(Data) then
             Data = { Caliber = Data }
         end
 
-        if IsValid(ply) and not ply:CheckLimit("acf_gausses") then return nil end
+        if IsValid(ply) and not ply:CheckLimit("acf_gausses") then
+            local Var = GetConVar and GetConVar("sbox_maxacf_gausses")
+
+            Refuse(ply, { "[acf_gauss] You have reached the limit of gauss rifles (the server variable sbox_maxacf_gausses is " .. (Var and Var:GetString() or "not set") .. ")." })
+
+            return nil
+        end
+
+        -- (23.2) Like the radiator: a model the SERVER does not have would make ACF's scalable base fail with a pile of errors, so say so instead.
+        local Model = ACFLazers.GaussString("GaussModel")
+
+        if not util.IsValidModel(Model) then
+            Refuse(ply, { "[acf_gauss] The model " .. Model .. " is missing on this server (GaussModel in acf_lazers_config.lua). Is it installed on the SERVER and is the file name spelled right?" })
+
+            return nil
+        end
 
         local ent = ents.Create("acf_gauss")
-        if not IsValid(ent) then return nil end
+
+        if not IsValid(ent) then
+            Refuse(ply, WhyNoEntity())
+
+            return nil
+        end
 
         -- ACF wants this table and a model BEFORE Spawn
         ent.ACF = {}
-        Contraption.SetModel(ent, ACFLazers.GaussString("GaussModel"))
+        Contraption.SetModel(ent, Model)
 
         ent:SetPos(pos)
         ent:SetAngles(angles)
@@ -625,6 +900,12 @@ if SERVER then
 
         -- Caliber, size, mass, health: all through the same function Update uses
         ent:ApplyData(Data)
+
+        if not IsValid(ent) then
+            Refuse(ply, { "[acf_gauss] The rifle removed itself while it was being built. Look in the server console for the error just above this line." })
+
+            return nil
+        end
 
         if IsValid(ply) then
             if ent.SetPlayer then ent:SetPlayer(ply) end
@@ -699,12 +980,48 @@ if SERVER then
         return true, "Gauss rifle unlinked from the ammo box."
     end)
 
-    -- Breaks every link this rifle has. Returns how many it broke. (The link kit's reload uses it.)
+    -- (23.3) LINKING rifle <-> capacitor, through ACF's own link system, the way the PPC does it: the rifle puts itself in the capacitor's Lazers set (the capacitor treats it like a lazer: the link count in its
+    -- hover text, unlinking when either is removed) and the capacitor in its own Caps set.
+    ACF.RegisterLinkSource("acf_gauss", "Caps")
+
+    ACF.RegisterClassLink("acf_gauss", "acf_capacitor", function(Gun, Cap)
+        if Gun.Caps[Cap] then return false, "This gauss rifle is already linked to this capacitor." end
+
+        Gun.Caps[Cap]   = true
+        Cap.Lazers[Gun] = true
+
+        ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1 -- every lazer, PPC, rifle and capacitor rebuilds its group the next time it needs it
+
+        Gun:RefreshPower(true)
+        Cap:UpdateOverlay(true)
+
+        return true, "Gauss rifle linked to the capacitor."
+    end)
+
+    ACF.RegisterClassUnlink("acf_gauss", "acf_capacitor", function(Gun, Cap)
+        if not (Gun.Caps[Cap] or Cap.Lazers[Gun]) then return false, "This gauss rifle is not linked to this capacitor." end
+
+        Gun.Caps[Cap]   = nil
+        Cap.Lazers[Gun] = nil
+
+        ACFLazers.LinkVersion = ACFLazers.LinkVersion + 1
+
+        Gun:RefreshPower(true)
+        Cap:UpdateOverlay(true)
+
+        return true, "Gauss rifle unlinked from the capacitor."
+    end)
+
+    -- Breaks every link this rifle has (boxes and, since 23.3, capacitors). Returns how many it broke. (The link kit's reload uses it.)
     function ENT:UnlinkAll()
         local count = 0
 
         for Crate in pairs(self.Crates) do
             if ACF.PerformClassUnlink(self, Crate) then count = count + 1 end
+        end
+
+        for Cap in pairs(self.Caps) do
+            if ACF.PerformClassUnlink(self, Cap) then count = count + 1 end
         end
 
         return count
@@ -722,6 +1039,16 @@ if SERVER then
             duplicator.StoreEntityModifier(self, "ACFGaussCrates", ids)
         end
 
+        if next(self.Caps) then
+            local ids = {}
+
+            for Cap in pairs(self.Caps) do
+                if IsValid(Cap) then ids[#ids + 1] = Cap:EntIndex() end
+            end
+
+            duplicator.StoreEntityModifier(self, "ACFGaussCaps", ids)
+        end
+
         self.BaseClass.PreEntityCopy(self) -- wire's own dupe info
     end
 
@@ -736,6 +1063,16 @@ if SERVER then
             end
 
             mods.ACFGaussCrates = nil
+        end
+
+        if mods and mods.ACFGaussCaps then
+            for _, id in pairs(mods.ACFGaussCaps) do
+                local Cap = CreatedEntities[id]
+
+                if IsValid(Cap) then self:Link(Cap) end
+            end
+
+            mods.ACFGaussCaps = nil
         end
 
         self.BaseClass.PostEntityPaste(self, Player, Ent, CreatedEntities)

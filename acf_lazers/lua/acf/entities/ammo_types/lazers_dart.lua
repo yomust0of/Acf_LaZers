@@ -1,5 +1,5 @@
 -- =========================================================================
--- THE DART: THE GAUSS RIFLE'S ONE AMMO TYPE  (23.1)
+-- THE DART: THE GAUSS RIFLE'S ONE AMMO TYPE  (23.3)
 -- Goes to:  lua/acf/entities/ammo_types/lazers_dart.lua      (ACF loads every file of that folder in every addon, server and client, with no AddCSLuaFile needed)
 --           lua/acf/entities/ammo_types/lazers_inert.lua of handoff 23 is GONE: delete it. The DART is the box's ammo AND the rifle's projectile, so there is one type, not two.
 --
@@ -21,6 +21,8 @@
 --     Everything is undone when the crate is changed to another ammo type (OnLast puts ACF's own behaviour back).
 -- It is blacklisted for every ACF weapon except the rifle's class (the weapon class is in lazers_gauss.lua), so it never shows up in an ACF gun's ammo menu and an ACF gun cannot be linked to a box
 -- of it (the gauss rifle checks the box itself: lua/entities/acf_gauss/init.lua).
+-- (23.3) THE TRACER IS ALWAYS ON: the data check below sets it on for every DART (the rifle's, and a box's), and the clients draw the streak GaussTracerLengthMult (2) times as long as ACF's own: the client
+-- part at the bottom hands ACF's bullet effect a stand-in for its tracer emitter (ACFLazers.WrapGaussTracer) that stretches the die time of the streak sprite.
 -- LATER (asked for): effects that show it is a gauss round. The client hook for that goes at the bottom.
 -- =========================================================================
 
@@ -61,9 +63,11 @@ end
 
 -- The round is the DART of the rifle's own caliber, however the data was asked for: the length comes from the config, there is no propellant. The caliber itself is held to the rifle's range here
 -- (ACF does not clamp the caliber of a crate for a scalable class: a dupe or a console command with a junk number would otherwise make a box ACF's round maths cannot work with). A CRATE (ACF passes
--- the weapon class as the second argument) also never has a tracer: the tracer is a choice of the rifle (the tool), which builds its own data.
+-- the weapon class as the second argument) has the same tracer as the rifle's: ALWAYS ON (23.3: it was a choice of the tool before, and a box never had one).
 function Ammo:VerifyData(ToolData, Class)
     Ammo.BaseClass.VerifyData(self, ToolData, Class)
+
+    ToolData.Tracer = true -- (23.3) always on, whoever asks and whatever the config says
 
     local Config = ACFLazers
 
@@ -74,8 +78,6 @@ function Ammo:VerifyData(ToolData, Class)
     ToolData.Caliber    = Caliber
     ToolData.Projectile = math.Round(Config.GetGaussDartLengthCm(Caliber), 2)
     ToolData.Propellant = 0
-
-    if Class then ToolData.Tracer = false end
 end
 
 if SERVER then
@@ -91,7 +93,7 @@ if SERVER then
     end
 
     -- What the clients read from the "crate" of a bullet (here: the rifle, whose index the bullet carries) to draw the flying projectile [SEEN effects/acf_bullet_effect.lua; ap.lua Ammo:Network]: the
-    -- ammo type, the caliber (of the ROD), the mass, the drag, the tracer, the acceleration (a ZERO vector: no gravity) and the model. A crate gets the same, with no tracer.
+    -- ammo type, the caliber (of the ROD), the mass, the drag, the tracer, the acceleration (a ZERO vector: no gravity) and the model. A crate gets the same (its tracer is on too, VerifyData makes it so).
     function Ammo:Network(Entity, BulletData)
         Entity:SetNW2String("AmmoType", ID)
         Entity:SetNW2Float("Caliber", BulletData.Diameter)
@@ -170,5 +172,19 @@ else
     -- The impact pictures (ACF's, inherited from APFSDS) look their decal up by the bullet's ammo type: this type has the dart's (the APCR) ones.
     ACF.RegisterAmmoDecal(ID, "damage/apcr_pen", "damage/apcr_rico")
 
-    -- LATER: hook.Add("ACF_OnCreateBulletEffect", "ACFLazers_GaussDart", function(Effect, BulletData) ... end) -- the gauss look of the flying DART (BulletData.AmmoType == ID).
+    -- (23.3) THE TRACER STREAK IS GaussTracerLengthMult TIMES AS LONG. ACF's bullet effect calls this hook once for every bullet it starts drawing, with the bullet's client data [SEEN effects/acf_bullet_effect.lua]:
+    -- BulletData.AmmoType is what the rifle networked (this type), BulletData.Tracer is the particle emitter ACF draws the streak with (only there when the rifle's tracer number is above 0). The emitter is replaced by
+    -- a stand-in (ACFLazers.WrapGaussTracer) that multiplies the die time of the streak sprite; everything else is passed on. At 1 nothing is replaced.
+    hook.Add("ACF_OnCreateBulletEffect", "ACFLazers_DartTracer", function(Effect, BulletData)
+        if not (istable(BulletData) and BulletData.AmmoType == ID and BulletData.Tracer) then return end
+        if not (ACFLazers and ACFLazers.WrapGaussTracer and ACFLazers.GetGaussTracerMult) then return end
+
+        local Mult = ACFLazers.GetGaussTracerMult()
+
+        if Mult == 1 then return end
+
+        BulletData.Tracer = ACFLazers.WrapGaussTracer(BulletData.Tracer, Mult)
+    end)
+
+    -- LATER: the gauss look of the flying DART (the same hook, BulletData.AmmoType == ID).
 end

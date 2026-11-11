@@ -4,7 +4,10 @@
 --           (same file in the game folder and on the server. The new lazer / capacitor / generator init.lua files REFUSE to load with the old config: they need the heat knobs and
 --            ACFLazers.HeatCool from this one, and the new file lua/autorun/acf_lazers_heat.lua)
 --
--- CHANGES in this file (23.1). It is YOUR config (the 23:43 one, your values and their [YOUR VALUE, shipped N] markers kept) plus the changes of 23 and 23.1:
+-- CHANGES in this file (23.3). It is YOUR config (the 23:43 one, your values and their [YOUR VALUE, shipped N] markers kept) plus the changes of 23, 23.1 and 23.3:
+--   * 23.3: THE GAUSS RIFLE TAKES ENERGY LIKE A PPC, AND ITS TRACER IS ALWAYS ON AND TWICE AS LONG. New knobs GaussEnergySmall (764 kJ at 30 mm), GaussEnergyBig (133,333 kJ at 300 mm), GaussEnergyCurve (0.75),
+--     GaussTracerLengthMult (2); a 100 mm shot costs 10,968 kJ, what a 100 mm PPC shot costs. New helpers GetGaussShotEnergy, GetGaussTracerMult, WrapGaussTracer; GetGaussToolData has no tracer choice any more;
+--     the readout has shotKJ. The global RequireCapacitor knob decides it for the rifle too (false = free shots).
 --   * 23.1: ONE AMMO TYPE for the gauss rifle. The DART is the ammo in the box AND the projectile (the separate "Inert" type of 23 is gone: delete lua\acf\entities\ammo_types\lazers_inert.lua).
 --     It is a child of ACF's APFSDS dart now. New knobs: GaussDartScale (0.35: the rod's width as a fraction of the caliber), GaussDartRicochet (80), GaussDartLimitVel (1000). GaussDartDensityMult 1 is now
 --     ACF's tungsten (it was steel); new helper GetGaussDartDiameterCm; GetGaussPenetration asks the DART type (ACF's long-rod equation); the readout gets dartWidth; GaussInertID is gone.
@@ -857,7 +860,7 @@ table.Merge(ACFLazers.Config, {
     FlameTrailColorB    = 60,
     -- ===================== GAUSS RIFLE (23) =====================
     -- The gauss rifle (entity acf_gauss, model GaussModel) shoots DART rounds (one ACF ammo type, lua/acf/entities/ammo_types/lazers_dart.lua, a child of ACF's APFSDS dart: ACF's long-rod penetration and ricochet rules):
-    -- a tungsten rod GaussDartLength calibers long, NO drop and NO drag (a straight line), at GaussSpeedSmall .. GaussSpeedBig m/s. It needs no power (yet); it uses ROUNDS from linked ammo boxes: ACF's own scalable
+    -- a tungsten rod GaussDartLength calibers long, NO drop and NO drag (a straight line), at GaussSpeedSmall .. GaussSpeedBig m/s. (23.3) A shot takes ENERGY from linked capacitors (GaussEnergy... below) and uses ROUNDS from linked ammo boxes: ACF's own scalable
     -- ammo crate holding the same DART type. A DART has nothing that can burn or blow up, so a box of them is inert: it never cooks off and never explodes, damaged or destroyed it just breaks like a plain prop.
     -- "Small .. Big" = a straight line over the rifle's size, GaussCaliberMin .. GaussCaliberMax mm (the mass, the refire time, the sound pitch). The muzzle VELOCITY bends at the base size on purpose: the rifle
     -- is GaussSpeedBase at GaussCaliberBase (2000 m/s at 100 mm, as asked), GaussSpeedSmall at the smallest (1400) and GaussSpeedBig at the biggest (2300), a straight line on each side of the base.
@@ -881,12 +884,18 @@ table.Merge(ACFLazers.Config, {
     GaussRefireBig      = 3,      -- [GUESS] ... seconds at GaussCaliberMax
     GaussAutoRepeat     = true,   -- true = holding Fire repeats the shot every refire time. false = one shot per press of Fire
     GaussRoundsPerShot  = 1,      -- rounds taken from the ammo boxes by one shot
+    -- ENERGY PER SHOT, in kJ (23.3), taken from the capacitors linked to the rifle (all at once, like a PPC shot). The size curve is the PPC's: GaussEnergyCurve 0 = a straight line, 1 = fully exponential, in between a mix
+    -- (the same rule as PPCEnergyCurve). The two ends are chosen so that a 100 mm rifle shot costs 10,968 kJ, what a 100 mm PPC shot costs (to the kJ). The global knob RequireCapacitor (false = free) decides for the rifle too.
+    GaussEnergySmall    = 764,    -- [GUESS] kJ one shot of the smallest rifle (GaussCaliberMin) costs
+    GaussEnergyBig      = 400000 / 3, -- kJ one shot of the biggest (GaussCaliberMax) costs: 133,333, the same as the biggest PPC (the biggest capacitor holds 203,575 kJ)
+    GaussEnergyCurve    = 0.75,   -- like PPCEnergyCurve. Clamped to 0 .. 1
     GaussLifetime       = 5,      -- seconds. The projectile is deleted this long after the shot, whatever else is going on (2000 m/s for 5 s is about 10 km: well past the edge of any map)
     GaussDartLength     = 5,      -- [GUESS] calibers. The DART is a rod this long (50 cm at 100 mm). Its mass, and with it ACF's penetration, follow from the length, the width and the density below
     GaussDartScale      = 0.35,   -- the rod is this fraction of the caliber wide (ACF's APFSDS: 0.35, so 35 mm at 100 mm). Thinner = longer for its weight = more penetration for the same speed
     GaussDartRicochet   = 80,     -- degrees: the base ricochet angle (ACF's APFSDS: 80; a plain AP shell has 60). A dart bounces off only at a shallower angle than a shell does
     GaussDartLimitVel   = 1000,   -- m/s: the speed it penetrates best at (ACF's APFSDS: 1000). The further the speed is from it, the sooner the dart ricochets. The ricochet angle shifts by (speed - this) / 100 degrees
     GaussDartDensityMult = 1,     -- multiplier on the DART's mass. 1 = ACF's own APFSDS rod (tungsten, ACF.TungstenDensity), 0.41 = steel. ACF's penetration formula assumes tungsten whatever this says
+    GaussTracerLengthMult = 2,    -- (23.3) the tracer of the DART is always on. This is how many times as long its streak is on the clients: 1 = ACF's own tracer, 2 = twice as long (the streak lasts this many times as long). Clamped to 0.1 .. 10
     GaussCrateMatchCaliber = true, -- true = a box only feeds a rifle of the SAME caliber (ACF's own rule for guns and crates). false = any DART box feeds any gauss rifle
     GaussCrateDistance  = 0,      -- units. A box further than this from the rifle is unlinked by itself. 0 = ACF's own LinkDistance (650)
     GaussFireSound      = "weapons/physcannon/superphys_launch1.wav", -- played at the muzzle at every shot. "" or false = silent
@@ -3457,6 +3466,7 @@ local GaussNumberDefaults = {
     GaussSpeedSmall = 1400, GaussSpeedBase = 2000, GaussSpeedBig = 2300,
     GaussRefireSmall = 0.5, GaussRefireBig = 3, GaussRoundsPerShot = 1, GaussLifetime = 5,
     GaussDartLength = 5, GaussDartScale = 0.35, GaussDartRicochet = 80, GaussDartLimitVel = 1000, GaussDartDensityMult = 1, GaussCrateDistance = 0,
+    GaussEnergySmall = 764, GaussEnergyBig = 400000 / 3, GaussEnergyCurve = 0.75, GaussTracerLengthMult = 2,
     GaussFireVolume = 1, GaussFireLevel = 100, GaussFirePitchSmall = 130, GaussFirePitchBig = 70,
 }
 
@@ -3571,6 +3581,75 @@ function ACFLazers.GetGaussMass(caliber) return math.max(GaussSize(caliber, "Gau
 --- Seconds between two shots.
 function ACFLazers.GetGaussRefire(caliber) return math.max(GaussSize(caliber, "GaussRefireSmall", "GaussRefireBig"), 0.01) end
 
+--- (23.3) kJ one shot costs, taken from the linked capacitors: GaussEnergySmall at the smallest rifle and GaussEnergyBig at the biggest; in between a mix of a straight line and an exponential curve
+--- (GaussEnergyCurve), the way GetPPCShotEnergy does it for the PPC.
+function ACFLazers.GetGaussShotEnergy(caliber)
+    local t      = ACFLazers.GetGaussSizeFraction(caliber)
+    local small  = math.max(ACFLazers.GaussNumber("GaussEnergySmall"), 1e-6)
+    local big    = math.max(ACFLazers.GaussNumber("GaussEnergyBig"), 1e-6)
+    local linear = Lerp(t, small, big)
+    local expo   = small * (big / small) ^ t
+    local mix    = math.Clamp(ACFLazers.GaussNumber("GaussEnergyCurve"), 0, 1)
+
+    return Lerp(mix, linear, expo)
+end
+
+--- (23.3) How many times as long as ACF's own the DART's tracer streak is drawn on the clients: GaussTracerLengthMult, held to 0.1 .. 10.
+function ACFLazers.GetGaussTracerMult()
+    return math.Clamp(ACFLazers.GaussNumber("GaussTracerLengthMult"), 0.1, 10)
+end
+
+--- (23.3) The sprite ACF draws the tracer streak with [SEEN effects/acf_bullet_effect.lua].
+ACFLazers.GaussTracerSprite = "sprites/acf_tracer.vmt"
+
+--- (23.3) A stand-in for the particle emitter of a flying bullet's tracer [SEEN effects/acf_bullet_effect.lua: Bullet.Tracer]. ACF adds the streak with emitter:Add("sprites/acf_tracer.vmt", pos) and then calls
+--- SetDieTime(0.075) on what it gets back, so the streak (a row of stretched sprites that fade out where they were made) is as long as the flight of the last 0.075 s. The stand-in hands everything on to the real
+--- emitter and the real particles, except that the particle of THAT sprite has its die time multiplied: a streak 'mult' times as long. Smoke and every other particle are left alone. Returns the stand-in; the
+--- caller puts it where the emitter was. (ACF only ever calls methods on it and asks IsValid; the stand-in answers both for the real emitter.)
+function ACFLazers.WrapGaussTracer(emitter, mult)
+    mult = tonumber(mult) or 1
+
+    local function Pass(real)
+        return function(_, key)
+            local value = real[key]
+
+            if isfunction(value) then
+                return function(_, ...) return value(real, ...) end
+            end
+
+            return value
+        end
+    end
+
+    local function WrapParticle(particle)
+        local pass = Pass(particle)
+
+        return setmetatable({}, { __index = function(self, key)
+            if key == "SetDieTime" then
+                return function(_, time) return particle:SetDieTime((tonumber(time) or 0) * mult) end
+            end
+
+            return pass(self, key)
+        end })
+    end
+
+    local pass = Pass(emitter)
+
+    return setmetatable({}, { __index = function(self, key)
+        if key == "Add" then
+            return function(_, material, position)
+                local particle = emitter:Add(material, position)
+
+                if particle and material == ACFLazers.GaussTracerSprite then return WrapParticle(particle) end
+
+                return particle
+            end
+        end
+
+        return pass(self, key)
+    end })
+end
+
 --- Muzzle velocity in m/s: GaussSpeedSmall at the smallest rifle, GaussSpeedBase at GaussCaliberBase, GaussSpeedBig at the biggest; a straight line on each side of the base.
 function ACFLazers.GetGaussSpeed(caliber)
     local low   = ACFLazers.GaussNumber("GaussCaliberMin")
@@ -3644,8 +3723,9 @@ function ACFLazers.GaussInertRound(Data)
     return Data
 end
 
---- The table ACF's ammo types turn into round data (Ammo:ServerConvert) for a gauss rifle of this caliber: the rifle's own class, no propellant, the DART's length, a tracer or not.
-function ACFLazers.GetGaussToolData(caliber, tracer)
+--- The table ACF's ammo types turn into round data (Ammo:ServerConvert) for a gauss rifle of this caliber: the rifle's own class, no propellant, the DART's length and (23.3) ALWAYS a tracer. The second
+--- argument of 23.2 and before is ignored.
+function ACFLazers.GetGaussToolData(caliber)
     caliber = ACFLazers.ClampGaussCaliber(caliber)
 
     return {
@@ -3656,7 +3736,7 @@ function ACFLazers.GetGaussToolData(caliber, tracer)
         AmmoStage  = 1,
         Projectile = math.Round(ACFLazers.GetGaussDartLengthCm(caliber), 2),
         Propellant = 0,
-        Tracer     = tracer and true or false,
+        Tracer     = true,
     }
 end
 
@@ -3703,6 +3783,7 @@ function ACFLazers.GetGaussReadout(caliber)
         dartWidth   = ACFLazers.GetGaussDartDiameterCm(caliber),    -- cm
         dartMass    = ACFLazers.GetGaussDartMass(caliber),          -- kg
         penetration = ACFLazers.GetGaussPenetration(caliber),       -- mm of steel at the muzzle (nil without ACF)
+        shotKJ      = ACFLazers.GetGaussShotEnergy(caliber),        -- (23.3) kJ one shot takes from the capacitors
         lifetime    = life,
         range       = speed * life,                                 -- metres flown before the projectile is deleted
         energy      = 0.5 * ACFLazers.GetGaussDartMass(caliber) * speed * speed / 1000, -- kJ the DART carries
